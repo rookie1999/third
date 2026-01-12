@@ -1,6 +1,7 @@
-# 忽略所有 pycache 文件夹
 __pycache__/
 *.pyc
+**/__pycache__/
+checkpoints_maact/    
 
 # 顺便推荐忽略的其他常见 Python 垃圾文件
 .DS_Store

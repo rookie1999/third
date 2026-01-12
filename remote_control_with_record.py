@@ -1,3 +1,5 @@
+import subprocess
+
 from utils import RemoteSubv2
 import rospy
 import time
@@ -9,6 +11,20 @@ import numpy as np
 import threading
 from utils.camera import RealSenseCamera
 
+def speak_feedback(text):
+    """
+    非阻塞语音播报函数
+    使用系统底层的 espeak 命令，不会卡住主线程
+    """
+    try:
+        # 使用 Popen 启动子进程，它是非阻塞的（立即返回）
+        # '-v', 'zh' 尝试使用中文发音（如果系统支持），如果听不懂中文可以去掉这部分或改为 'en'
+        # 你可以调整参数，比如 '-s', '160' 来调整语速
+        subprocess.Popen(['espeak', '-v', 'zh', '-s', '160', text],
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"[TTS Error] 语音调用失败: {e}")
 
 if __name__ == "__main__":
     
@@ -97,17 +113,20 @@ if __name__ == "__main__":
             if cmd == 's':
                 if not remote_node.is_recording:
                     print(f"Episode {remote_node.episode_idx} Recording Started...")
+                    speak_feedback("Starting recording")
                     remote_node.start_recording()
                 else:
                     print("Already recording!")
             elif cmd == 'e':
                 if remote_node.is_recording:
-                    print(f"Episode Saved. Next index: {remote_node.episode_idx}")
                     remote_node.stop_recording_and_save()
+                    print(f"Episode Saved. Next index: {remote_node.episode_idx}")
+                    speak_feedback("Finish recording and save.")
                 else:
                     print("Not currently recording.")
             elif cmd == 'q':
                 print("Quitting...")
+                speak_feedback("Stop Recording. Exiting.")
                 break
             else:
                 print("Unknown command.")

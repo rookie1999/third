@@ -1,68 +1,90 @@
-import os
-import sys
 import glob
+import os
 import pickle
+import sys
+
+import matplotlib.pyplot as plt
 import torch
-import numpy as np
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-
-
+# 添加项目根目录到路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-from maact.common.configs.configuration_act import SpeedACTConfig
-from maact.common.model.speed_act_modulate_full_model import SpeedACT
+# 引入 MA-ACT 相关模块
+from policy.maact.common.configs.configuration_act import SpeedACTConfig
+from policy.maact.common.model.speed_act_modulate_full_model import SpeedACT
 from dataset.efficient_ma_dataset import EfficientEpisodicDataset
 from dataset.utils_norm import get_norm_stats
 
-# 导入两种策略
-# from policy.act.policy import ACTPolicy  # 旧版 Standard ACT
+
+def kl_divergence(mu, logvar):
+    """
+    计算 KL 散度 Loss (VAE 必要组件)
+    """
+    batch_size = mu.size(0)
+    assert batch_size != 0
+    if mu.data.ndimension() == 4:
+        mu = mu.view(mu.size(0), mu.size(1))
+    if logvar.data.ndimension() == 4:
+        logvar = logvar.view(logvar.size(0), logvar.size(1))
+
+    klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+    total_kld = klds.sum(1).mean(0, True)
+    dimension_wise_kld = klds.mean(0)
+    mean_kld = klds.mean(1).mean(0, True)
+
+    return total_kld, dimension_wise_kld, mean_kld
 
 
 def main():
     # =========================================================================
-    # 1. 核心配置区域 (修改这里来适配你的训练)
+    # 1. 核心配置区域
     # =========================================================================
 
-    # [关键开关] True = 训练 MA-ACT (SpeedACT); False = 训练普通 ACT
-    USE_SPEED_ACT = True
-
-    # 数据与保存路径
-    DATA_DIR = r'F:\projects\lumos\data\20260109'  # 你的数据路径
-    CKPT_DIR = './checkpoints'  # 模型保存路径
+    # 路径配置
+    DATA_DIR = r'F:\projects\lumos\data\20260109'  # 数据集路径
+    CKPT_DIR = './checkpoints_maact'  # 模型保存路径
     os.makedirs(CKPT_DIR, exist_ok=True)
     STATS_PATH = os.path.join(CKPT_DIR, 'dataset_stats.pkl')
 
-    # 训练超参数
-    NUM_EPOCHS = 5000
-    BATCH_SIZE_PER_GPU = 8  # 实际单次前向的 Batch Size (受显存限制)
-    TARGET_BATCH_SIZE = 32  # 目标 Batch Size (通过梯度累积实现)
-    ACCUMULATION_STEPS = max(1, TARGET_BATCH_SIZE // BATCH_SIZE_PER_GPU)
-
-    LR = 1e-4
-    CHUNK_SIZE = 100  # 预测未来多少步
-
-    # 机器人与相机配置
-    CAMERA_NAMES = ['cam_high']  # 你的数据集中的相机列表
-    MAIN_CAMERA_NAME = 'cam_high'  # MA-ACT 需要指定主相机计算光流
-
-    # 状态维度配置
-    STATE_DIM = 14  # 机械臂状态维度 (例如 7关节 + 7速度)
-    ACTION_DIM = 14  # 动作维度
-
-    # YOLO 权重路径 (仅 MA-ACT 需要)
+    # YOLO 权重路径 (MA-ACT 计算光流 Mask 必需)
     YOLO_CKPT = r"F:\projects\lumos\ma_act\src\object_detection\object_detection_ckpt\yolov8n.pt"
 
-    print(f"🚀 Training Mode: {'MA-ACT (SpeedACT)' if USE_SPEED_ACT else 'Standard ACT'}")
+    # 训练超参数
+    NUM_EPOCHS = 5000
+    BATCH_SIZE_PER_GPU = 8  # 单卡实际 Batch Size
+    TARGET_BATCH_SIZE = 32  # 目标 Batch Size (梯度累积)
+    ACCUMULATION_STEPS = max(1, TARGET_BATCH_SIZE // BATCH_SIZE_PER_GPU)
+
+    LR = 1e-4  # 全局(Transformer)学习率
+    LR_BACKBONE = 1e-5  # Backbone 专用较小学习率
+
+    CHUNK_SIZE = 100  # 动作预测长度
+    KL_WEIGHT = 10.0  # KL Loss 权重系数
+
+    # 机器人与相机配置
+    CAMERA_NAMES = ['cam_high']  # 数据集中的相机列表
+    MAIN_CAMERA_NAME = 'cam_high'  # 用于计算光流的主相机
+
+    # [关键修正] 维度需匹配您的数据集 (之前报错是因为这里填了14，但数据是7)
+    STATE_DIM = 7  # 机械臂状态维度
+    ACTION_DIM = 7  # 动作维度
+
+    # MA-ACT 必需历史帧
+    N_OBS_STEPS = 2  # 观察历史步数 (>=2)
+
+    print(f"🚀 Training Mode: MA-ACT (SpeedACT)")
     print(f"📦 Batch Size: {BATCH_SIZE_PER_GPU} (Accumulate to {TARGET_BATCH_SIZE})")
+    print(f"🔧 LR: {LR}, Backbone LR: {LR_BACKBONE}")
+    print(f"📏 Dimensions: State={STATE_DIM}, Action={ACTION_DIM}")
 
     # =========================================================================
-    # 2. 初始化 Dataset 和 DataLoader
+    # 2. 数据集准备
     # =========================================================================
 
-    # 自动计算统计数据 (Mean/Std)
     if not os.path.exists(STATS_PATH):
         print(f"Computing stats from {DATA_DIR}...")
         stats = get_norm_stats(DATA_DIR)
@@ -75,16 +97,12 @@ def main():
 
     dataset_path_list = glob.glob(os.path.join(DATA_DIR, '*.hdf5'))
 
-    # [关键] 根据模式设定 n_obs_steps
-    # MA-ACT 需要至少 2 帧来计算光流；ACT 只需要 1 帧
-    current_n_obs_steps = 2 if USE_SPEED_ACT else 1
-
     train_dataset = EfficientEpisodicDataset(
         dataset_path_list,
         stats,
         camera_names=CAMERA_NAMES,
         chunk_size=CHUNK_SIZE,
-        n_obs_steps=current_n_obs_steps
+        n_obs_steps=N_OBS_STEPS
     )
 
     train_loader = DataLoader(
@@ -97,59 +115,63 @@ def main():
     )
 
     # =========================================================================
-    # 3. 初始化模型 (Policy)
+    # 3. 初始化 MA-ACT 模型
     # =========================================================================
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if USE_SPEED_ACT:
-        # --- 初始化 MA-ACT ---
-        config = SpeedACTConfig(
-            dim_model=512,
-            n_heads=8,
-            dim_feedforward=3200,
-            n_encoder_layers=4,
-            n_decoder_layers=1,
-            chunk_size=CHUNK_SIZE,
-            n_obs_steps=current_n_obs_steps,  # 必须 >= 2
+    config = SpeedACTConfig(
+        dim_model=512,
+        n_heads=8,
+        dim_feedforward=3200,
+        n_encoder_layers=4,
+        n_decoder_layers=1,
+        chunk_size=CHUNK_SIZE,
+        n_obs_steps=N_OBS_STEPS,
 
-            # 视觉配置
-            image_features={cam: (3, 480, 640) for cam in CAMERA_NAMES},  # 假设图片都是 480x640
-            main_camera=MAIN_CAMERA_NAME,
+        image_features={cam: (3, 480, 640) for cam in CAMERA_NAMES},
+        main_camera=MAIN_CAMERA_NAME,
 
-            # 状态配置
-            robot_state_feature=(STATE_DIM,),  # 注意这是 tuple
-            action_feature=(ACTION_DIM,),
+        robot_state_feature=(STATE_DIM,),
+        action_feature=(ACTION_DIM,),
 
-            # 功能开关
-            use_optical_flow=True,
-            object_detection_ckpt_path=YOLO_CKPT,
+        use_optical_flow=True,
+        object_detection_ckpt_path=YOLO_CKPT,
+        cropped_flow_h=64,
+        cropped_flow_w=64,
 
-            # 光流参数
-            cropped_flow_h=64,
-            cropped_flow_w=64,
+        feedforward_activation="relu",
+        pre_norm=False
+    )
 
-            # 缺失属性补全 (防止报错)
-            feedforward_activation="relu",
-            pre_norm=False
-        )
-        policy = SpeedACT(config).to(device)
-    # else:
-    #     # --- 初始化 Standard ACT ---
-    #     policy = ACTPolicy(
-    #         action_dim=ACTION_DIM,
-    #         state_dim=STATE_DIM,
-    #         hidden_dim=512,
-    #         chunk_size=CHUNK_SIZE,
-    #         # 如果你有特定的 VAE 或 Backbone 参数，请在这里添加
-    #     ).to(device)
+    policy = SpeedACT(config).to(device)
 
-    # 优化器
-    optimizer = torch.optim.AdamW(policy.parameters(), lr=LR, weight_decay=1e-4)
+    # -----------------------------------------------------------
+    # 优化器参数分组 (Backbone 使用低学习率)
+    # -----------------------------------------------------------
+    param_groups = [
+        # 1. Backbone 参数 (LR = 1e-5)
+        {
+            "params": [p for n, p in policy.named_parameters() if "backbone" in n and p.requires_grad],
+            "lr": LR_BACKBONE,
+        },
+        # 2. 其他所有参数 (Transformer, Heads 等) (LR = 1e-4)
+        {
+            "params": [p for n, p in policy.named_parameters() if "backbone" not in n and p.requires_grad],
+            "lr": LR,
+        },
+    ]
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=1e-4)
 
     # =========================================================================
     # 4. 训练循环
     # =========================================================================
     best_loss = float('inf')
+    train_losses = []
+
+    # 定义归一化参数 (ImageNet Stats)
+    # 形状: (1, 1, 3, 1, 1) 用于广播匹配 (Batch, Time, Channel, Height, Width)
+    NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 1, 3, 1, 1)
+    NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 1, 3, 1, 1)
 
     for epoch in range(NUM_EPOCHS):
         policy.train()
@@ -157,77 +179,96 @@ def main():
         optimizer.zero_grad()
 
         for batch_idx, data in enumerate(train_loader):
-            # 解包数据 (来自 efficient_dataset.py 的 __getitem__)
-            # images_list: 如果 n_obs=1 是 [(B,C,H,W)...], 如果 n_obs=2 是 [(B,T,C,H,W)...]
+            # 解包数据 (images_list 包含多帧: B, T, C, H, W)
             images_list, qpos, action, is_pad = data
 
             # 数据移动到 GPU
+            # 注意：images_list 里的数据此时是 [0, 1] 范围的 float
             images_list = [x.to(device, non_blocking=True) for x in images_list]
             qpos = qpos.to(device, non_blocking=True)
             action = action.to(device, non_blocking=True)
             is_pad = is_pad.to(device, non_blocking=True)
 
-            # --- 分支：数据输入模型 ---
-            if USE_SPEED_ACT:
-                # [MA-ACT 分支] 构造字典输入
-                batch_input = {
-                    "observation.state": qpos,  # (B, T, D)
-                    "action": action,  # (B, Chunk, D)
-                    "action_is_pad": is_pad,  # (B, Chunk)
-                    "observation.images": images_list  # List[(B, T, C, H, W)]
-                }
-                # 手动注入主相机数据用于光流计算
-                # 假设 config.main_camera 对应的就是 images_list[0] (如果是单摄)
-                # 如果是多摄，请根据 camera_names 的顺序索引，这里默认取第一个
-                batch_input[MAIN_CAMERA_NAME] = images_list[0]
+            # -----------------------------------------------------------
+            # 图像归一化 (Normalize to ImageNet Stats)
+            # -----------------------------------------------------------
+            normalized_images_list = []
+            for img in images_list:
+                # img shape: (B, T, 3, H, W)
+                # 执行广播运算
+                norm_img = (img - NORM_MEAN) / NORM_STD
+                normalized_images_list.append(norm_img)
 
-                loss_dict = policy(batch_input)
+            # 构造输入字典
+            batch_input = {
+                "observation.state": qpos,
+                "action": action,
+                "action_is_pad": is_pad,
+                "observation.images": normalized_images_list  # 使用归一化后的图片
+            }
+            # 主相机用于光流
+            batch_input[MAIN_CAMERA_NAME] = normalized_images_list[0]
 
-            else:
-                # [Standard ACT 分支] 参数列表输入
-                # ACT 通常只接受单张图片（或者多张 concat）
-                # 这里假设取第一个相机的图像
-                image_input = images_list[0]  # (B, C, H, W)
+            # -----------------------------------------------------------
+            # Loss 计算 (L1 + KL)
+            # -----------------------------------------------------------
 
-                loss_dict = policy(qpos, image_input, actions=action, is_pad=is_pad)
+            # 前向传播
+            pred_actions, (mu, logvar) = policy(batch_input)
 
-            # --- Loss 处理与反向传播 ---
-            loss = loss_dict['loss']
+            # L1 Loss (Masked)
+            all_l1 = F.l1_loss(pred_actions, action, reduction='none')
+            l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
 
-            # 梯度累积：Loss 除以步数
+            # KL Loss
+            total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
+            kl_loss = total_kld[0]
+
+            # 总 Loss
+            loss = l1 + KL_WEIGHT * kl_loss
+
+            # 梯度累积
             loss_scaled = loss / ACCUMULATION_STEPS
             loss_scaled.backward()
 
-            # 记录真实 Loss
             epoch_loss += loss.item()
 
-            # 执行更新
             if (batch_idx + 1) % ACCUMULATION_STEPS == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
-        # 处理 Epoch 结尾剩余的梯度
+        # 处理 Epoch 剩余梯度
         if len(train_loader) % ACCUMULATION_STEPS != 0:
             optimizer.step()
             optimizer.zero_grad()
 
-        # 打印日志
+        # 日志记录
         avg_loss = epoch_loss / len(train_loader)
-        print(f"Epoch {epoch}: Loss = {avg_loss:.5f}")
+        train_losses.append(avg_loss)
+        print(f"Epoch {epoch}: Loss = {avg_loss:.5f} (L1={l1.item():.4f}, KL={kl_loss.item():.4f})")
 
-        # 保存权重
+        # 定期保存与绘图
         if epoch % 500 == 0:
-            ckpt_name = f"policy_epoch_{epoch}_ma_act.ckpt" if USE_SPEED_ACT else f"policy_epoch_{epoch}_act.ckpt"
-            save_path = os.path.join(CKPT_DIR, ckpt_name)
+            save_path = os.path.join(CKPT_DIR, f"policy_epoch_{epoch}.ckpt")
             torch.save(policy.state_dict(), save_path)
 
-        # 保存最佳权重
+            # 简单绘图
+            plt.figure()
+            plt.plot(train_losses)
+            plt.title("Training Loss")
+            plt.xlabel("Epoch")
+            plt.ylabel("Loss")
+            plt.savefig(os.path.join(CKPT_DIR, 'loss_curve.png'))
+            plt.close()
+
+        # 保存最佳模型
         if avg_loss < best_loss:
             best_loss = avg_loss
-            ckpt_name = "policy_best_ma_act.ckpt" if USE_SPEED_ACT else "policy_best_act.ckpt"
-            save_path = os.path.join(CKPT_DIR, ckpt_name)
+            save_path = os.path.join(CKPT_DIR, "policy_best.ckpt")
             torch.save(policy.state_dict(), save_path)
             print(f"✅ Best model saved with loss {best_loss:.5f}")
+
+    print("Training Done!")
 
 
 if __name__ == '__main__':

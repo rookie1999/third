@@ -11,7 +11,7 @@ from torchvision.ops import FrozenBatchNorm2d
 
 from policy.maact.common.configs.configuration_act import SpeedACTConfig, perform_yolo_detection
 from policy.maact.common.model.base_act import ACTSinusoidalPositionEmbedding2d, ACTEncoder, \
-    create_sinusoidal_pos_embedding
+    create_sinusoidal_pos_embedding, ACTDecoder
 from policy.maact.optical_flow.pwc import predict
 
 # 日志配置：设置为 WARNING 级别，减少不必要的输出
@@ -414,11 +414,19 @@ class SpeedACT(nn.Module):
             main_camera_images = batch[self.config.main_camera]
             current_images = main_camera_images[:, -1, :, :, :]
             prev_images = main_camera_images[:, -2, :, :, :]
-            resized_prev_images = self.detection_image_transform(prev_images)
-            resized_current_images = self.detection_image_transform(current_images)
-            current_optical_flow_batch = predict(resized_prev_images, resized_current_images, self.config.device)
+
+            with torch.no_grad():
+                # 反归一化 (De-normalization)
+                mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+                std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+                yolo_input_images = current_images * std + mean
+                yolo_input_images = torch.clamp(yolo_input_images, 0.0, 1.0)
+                resized_prev_images = self.detection_image_transform(prev_images)
+                resized_current_images = self.detection_image_transform(current_images)
+                current_optical_flow_batch = predict(resized_prev_images, resized_current_images, self.config.device)
+                
             yolo_detection_results = perform_yolo_detection(
-                current_images,
+                yolo_input_images,
                 self.config.object_detection_ckpt_path,
                 device,
                 imgsz=(self.config.optical_flow_map_width, self.config.optical_flow_map_height)

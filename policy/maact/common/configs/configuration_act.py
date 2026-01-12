@@ -103,6 +103,7 @@ class SpeedACTConfig:
     n_action_steps: int = 100
     n_obs_steps: int = 1
     dropout: float = 0.1
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     # --- [关键修复] 添加缺失的 Transformer 属性 ---
     feedforward_activation: str = "relu"  # <--- 必须添加这个

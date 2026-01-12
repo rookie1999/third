@@ -3,124 +3,155 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from dataset.utils_norm import normalize_data
+from tqdm import tqdm
 
 
 class EfficientEpisodicDataset(Dataset):
     def __init__(self, dataset_path_list, stats, camera_names=['cam_high'], chunk_size=100, use_cache=True):
+        """
+        Args:
+            dataset_path_list: 数据集路径列表
+            stats: 归一化统计数据
+            camera_names: 摄像头名称列表
+            chunk_size: 动作预测长度
+            use_cache: (本版修改) True=全量加载到内存(极快); False=使用旧版磁盘读取(慢但省内存)
+        """
         super().__init__()
         self.stats = stats
         self.camera_names = camera_names
         self.chunk_size = chunk_size
         self.use_cache = use_cache
-
         self.dataset_path_list = dataset_path_list
 
-        # 1. 建立索引，但不加载数据 (轻量级)
-        # 结构: self.indices[global_idx] = (file_path, episode_idx_in_file, start_ts, episode_len)
+        self.episodes = []
         self.indices = []
 
-        # 我们需要知道每个文件的长度，这里只读元数据
-        for path in dataset_path_list:
-            with h5py.File(path, 'r') as f:
-                # 假设每个文件包含一个 episode 或者多个，原代码逻辑看起来是一个文件可能包含一个episode
-                # 原代码逻辑: path -> qpos (len)
-                # 为了不破坏逻辑，我们假设每个 path 就是一个 episode
-                qpos_len = f['observations/qpos'].shape[0]
-                action_len = f['action'].shape[0]
+        if self.use_cache:
+            print(f"🚀 Pre-loading {len(dataset_path_list)} episodes into RAM (UInt8 mode)...")
+            # --- 模式 A: 内存全量加载 (极速模式) ---
+            for ep_idx, path in enumerate(tqdm(dataset_path_list)):
+                with h5py.File(path, 'r') as f:
+                    # 1. 读取基础数据
+                    qpos = f['observations/qpos'][:]
+                    action = f['action'][:]
 
-                # 每一个时间步都可以作为一个样本的起始点
-                for t in range(qpos_len):
-                    self.indices.append({
-                        'path': path,
-                        'start_ts': t,
-                        'total_len': qpos_len,
-                        'action_len': action_len
+                    # 2. 读取图像 (保持 uint8)
+                    image_dict = {}
+                    for cam in camera_names:
+                        img_data = f[f'observations/images/{cam}'][:]
+                        # 统一转换为 (T, C, H, W) 格式
+                        if img_data.shape[-1] == 3:  # 如果是 (T, H, W, C)
+                            img_data = img_data.transpose(0, 3, 1, 2)
+                        image_dict[cam] = img_data
+
+                    episode_len = len(qpos)
+                    self.episodes.append({
+                        'qpos': qpos,
+                        'action': action,
+                        'images': image_dict,
+                        'len': episode_len
                     })
 
-        # 2. 文件句柄缓存 (Worker 级别)
-        # PyTorch DataLoader 的每个 worker 进程是独立的，不能共享 h5py 句柄
-        # 我们将在 __getitem__ 中懒加载句柄
-        self._file_handles = {}
+                    # 建立索引
+                    for t in range(episode_len):
+                        self.indices.append((ep_idx, t))
+            print(f"✅ Loaded {len(self.indices)} samples. RAM optimized.")
+
+        else:
+            # --- 模式 B: 磁盘动态读取 (省内存模式 - 旧版逻辑) ---
+            print(f"🐢 Lazy-loading mode (Disk I/O heavy).")
+            for path in dataset_path_list:
+                with h5py.File(path, 'r') as f:
+                    qpos_len = f['observations/qpos'].shape[0]
+                    action_len = f['action'].shape[0]
+                    for t in range(qpos_len):
+                        self.indices.append({
+                            'path': path,
+                            'start_ts': t,
+                            'total_len': qpos_len,
+                            'action_len': action_len
+                        })
+            self._file_handles = {}
 
     def __len__(self):
         return len(self.indices)
 
     def _get_file_handle(self, path):
-        if not self.use_cache:
-            return h5py.File(path, 'r')
-
         if path not in self._file_handles:
-            # swmr=True (Single Writer Multiple Reader) 有助于并发读取稳定性
-            # libver='latest' 使用最新的格式，通常更快
             self._file_handles[path] = h5py.File(path, 'r', swmr=True, libver='latest')
         return self._file_handles[path]
 
     def __getitem__(self, index):
-        meta = self.indices[index]
-        path = meta['path']
-        start_ts = meta['start_ts']
-        total_len = meta['total_len']
+        if self.use_cache:
+            # ==========================================
+            # 模式 A: 从内存读取 (无 IO)
+            # ==========================================
+            ep_idx, start_ts = self.indices[index]
+            episode = self.episodes[ep_idx]
 
-        # 获取文件句柄
-        f = self._get_file_handle(path)
+            # 1. Qpos
+            qpos = episode['qpos'][start_ts]
+            qpos = normalize_data(qpos, self.stats, 'qpos')
+            qpos_tensor = torch.from_numpy(qpos).float()
 
-        try:
-            # 1. 获取当前观测 (Observation)
-            # 动态读取: 只读 start_ts 这一帧
-            qpos = f['observations/qpos'][start_ts]
-
-            # 图像处理: 动态读取并转换
+            # 2. Images (UInt8 -> Float / 255.0)
             imgs = []
             for cam in self.camera_names:
-                # 假设原始存储格式是 (T, H, W, C) 或者 (T, C, H, W)
-                # 你的原代码中 img = img.transpose(0, 3, 1, 2) 暗示原始是 (T, H, W, C)
-                # 我们只读第 start_ts 帧，得到 (H, W, C)
-                img_data = f[f'observations/images/{cam}'][start_ts]
+                img_uint8 = episode['images'][cam][start_ts]  # (C, H, W)
+                # 实时归一化 0-1
+                img_float = torch.from_numpy(img_uint8).float() / 255.0
+                imgs.append(img_float)
+            image_tensor = torch.stack(imgs, dim=0)
 
-                # 转换为 (C, H, W)
-                # 如果原始是 (H, W, C) -> permute (2, 0, 1)
-                # 如果原始是 (C, H, W) -> 不动
-                # 根据原代码 `transpose(0, 3, 1, 2)` (N, H, W, C) -> (N, C, H, W) 推断，单帧是 (H, W, C)
-                img_data = img_data.transpose(2, 0, 1)
+            # 3. Action Chunk
+            action_full = episode['action']
+            action_len = episode['len']
 
-                # 归一化 (放在这里做，随用随算，节省 RAM 存储)
-                img_data = img_data / 255.0
-                imgs.append(img_data)
+        else:
+            # ==========================================
+            # 模式 B: 从磁盘读取 (有 IO)
+            # ==========================================
+            meta = self.indices[index]
+            path, start_ts = meta['path'], meta['start_ts']
+            f = self._get_file_handle(path)
 
-            image = np.stack(imgs, axis=0)  # (Num_cams, C, H, W)
-
-            # Qpos Normalize
+            # 1. Qpos
+            qpos = f['observations/qpos'][start_ts]
             qpos = normalize_data(qpos, self.stats, 'qpos')
-            qpos = torch.from_numpy(qpos).float()
-            image = torch.from_numpy(image).float()
+            qpos_tensor = torch.from_numpy(qpos).float()
 
-            # 2. 获取未来动作块 (Action Chunk)
-            end_ts = start_ts + self.chunk_size
+            # 2. Images
+            imgs = []
+            for cam in self.camera_names:
+                img_data = f[f'observations/images/{cam}'][start_ts]
+                # 假设原始是 (H, W, C) -> permute (2, 0, 1)
+                img_data = img_data.transpose(2, 0, 1)
+                img_float = torch.from_numpy(img_data).float() / 255.0
+                imgs.append(img_float)
+            image_tensor = torch.stack(imgs, dim=0)
+
+            # 3. Action Setup
+            action_full = f['action']  # h5py dataset object
             action_len = meta['action_len']
 
-            if end_ts > action_len:
-                # 需要 Padding
-                # 只读取需要的切片
-                curr_action = f['action'][start_ts:]
-                pad_len = end_ts - action_len
-                last_action = curr_action[-1]
-                pad_action = np.repeat(last_action[np.newaxis, :], pad_len, axis=0)
-                action_chunk = np.concatenate([curr_action, pad_action], axis=0)
-                is_pad = np.zeros(self.chunk_size, dtype=bool)
-                is_pad[-pad_len:] = True
-            else:
-                # 直接读取切片
-                action_chunk = f['action'][start_ts:end_ts]
-                is_pad = np.zeros(self.chunk_size, dtype=bool)
+        # --- 公共部分：Action Chunk 切片逻辑 ---
+        end_ts = start_ts + self.chunk_size
 
-            action_chunk = normalize_data(action_chunk, self.stats, 'action')
+        if end_ts > action_len:
+            # 需要 Padding
+            curr_action = action_full[start_ts:]
+            pad_len = end_ts - action_len
+            # 注意: 如果是 h5py 对象，curr_action已经是numpy array了
+            last_action = curr_action[-1]
+            pad_action = np.repeat(last_action[np.newaxis, :], pad_len, axis=0)
+            action_chunk = np.concatenate([curr_action, pad_action], axis=0)
+            is_pad = np.zeros(self.chunk_size, dtype=bool)
+            is_pad[-pad_len:] = True
+        else:
+            action_chunk = action_full[start_ts:end_ts]
+            is_pad = np.zeros(self.chunk_size, dtype=bool)
 
-            # 如果没有使用缓存，记得关闭文件
-            if not self.use_cache:
-                f.close()
+        # Action Normalize
+        action_chunk = normalize_data(action_chunk, self.stats, 'action')
 
-            return image, qpos, torch.from_numpy(action_chunk).float(), torch.from_numpy(is_pad).bool()
-
-        except Exception as e:
-            print(f"Error reading file {path} at index {start_ts}: {e}")
-            raise e
+        return image_tensor, qpos_tensor, torch.from_numpy(action_chunk).float(), torch.from_numpy(is_pad).bool()
