@@ -17,7 +17,6 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 from torchvision.utils import save_image
 
-from maact.common.configs.configuration_act import SpeedACTConfig
 
 
 class ACTTemporalEnsembler:

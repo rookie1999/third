@@ -9,10 +9,10 @@ from torch import Tensor, nn
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops import FrozenBatchNorm2d
 
-from maact.common.configs.configuration_act import SpeedACTConfig, perform_yolo_detection
-from maact.common.model.base_act import ACTSinusoidalPositionEmbedding2d, ACTEncoder, create_sinusoidal_pos_embedding, \
-    ACTDecoder
-from optical_flow.pwc import predict
+from policy.maact.common.configs.configuration_act import SpeedACTConfig, perform_yolo_detection
+from policy.maact.common.model.base_act import ACTSinusoidalPositionEmbedding2d, ACTEncoder, \
+    create_sinusoidal_pos_embedding
+from policy.maact.optical_flow.pwc import predict
 
 # 日志配置：设置为 WARNING 级别，减少不必要的输出
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')

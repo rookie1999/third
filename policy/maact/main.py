@@ -1,23 +1,7 @@
 import torch
-import torch.nn as nn
-import sys
-import os
 
-from common.configs.configuration_act import SpeedACTConfig
-from common.model.speed_act_modulate_full_model import SpeedACT
-
-
-# 假设您的文件结构如下，将当前目录加入路径以确保能找到模块
-# maact/
-#   ├── main.py
-#   ├── common/
-#       ├── model/
-#           ├── speed_act_modulate_full_model.py
-#           ├── configuration_act.py
-#           ├── base_act.py
-
-# 根据您的 Traceback，调整 import 路径
-# 如果您是在 maact 目录下运行 python main.py，可能需要根据实际情况调整
+from policy.maact.common.configs.configuration_act import SpeedACTConfig
+from policy.maact.common.model.speed_act_modulate_full_model import SpeedACT
 
 
 def test_standalone_model():

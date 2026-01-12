@@ -1,6 +1,6 @@
 import torch
 
-from optical_flow.run import get_model
+from policy.maact.optical_flow.run import get_model
 
 
 def predict(first, second, device="cuda"):

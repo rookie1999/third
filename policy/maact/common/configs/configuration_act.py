@@ -1,6 +1,5 @@
-# standalone_speed_act.py 部分 1: 配置类
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
 
 import torch
