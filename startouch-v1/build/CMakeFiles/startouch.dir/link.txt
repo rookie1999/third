@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC   -shared  -o ../interface_py/startouch.cpython-310-x86_64-linux-gnu.so CMakeFiles/startouch.dir/pybind_0825testfast.cpp.o  -Wl,-rpath,/home/lumos/act_startouch/replay_remote_ctrl/startouch-v1/lib -flto ../lib/libstartouch.so -lpthread 

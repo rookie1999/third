@@ -1,0 +1,5 @@
+python-can>=4.3.1
+scipy
+piper_sdk
+xarm-python-sdk
+rospkg

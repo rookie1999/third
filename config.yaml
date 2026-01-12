@@ -1,0 +1,29 @@
+DATA_ROOT: "~/data_collection_11.14/data_collector_opt"
+speed_rate: 0.8 
+pose_topic: "/vive/LHR_5A5B370E/pose"
+clamp_topic: "/xv_sdk/250801DR48FP25002658/clamp/Data"
+Piper:
+    enable: false
+    can_port: "can0"
+    T_base2local:  [ [ 0         ,  0.        ,  1         ,  0.19  ],
+                    [ 0.        ,  1.        100,  0.        ,  0.        ],
+                    [-1.        ,  0.        ,  0         ,  0.20  ],
+                    [ 0.        ,  0.        ,  0.        ,  1.        ]]
+    initial_joints: [2.374,38.046,-32.942,56.429,-2.136,-56.285]  #deg
+
+Xarm7:
+    enable: false
+    robot_ip: "192.168.1.224"
+    T_base2local:  [ [ 0         ,  0.        ,  1         ,  0.29  ],
+                    [ 0.        ,  -1.        ,  0.        ,  0.22        ],
+                    [1.        ,  0.        ,  0         ,  0.1  ],
+                    [ 0.        ,  0.        ,  0.        ,  1.        ]]
+    initial_joints: [85.2,16,-4.4,15.5,-101.6,89.4,-177.1] #radians
+StarTouch:
+    enable: true
+    can_port: "can0" 
+    T_base2local:  [ [ 1         ,  0.        ,  0         ,  0.3  ],
+                    [ 0.        ,  1.        ,  0.        ,  0.      ],
+                    [0.        ,  0.        ,  1         ,  0.18  ],
+                    [ 0.        ,  0.        ,  0.        ,  1.        ]]
+    initial_joints: [-0.01468681 , 0.58384833 , 0.23212787 , 0.38242924 ,-0.04100862 , 0.        ]  #radians
