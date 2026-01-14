@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.idea/
+.vscode/
+
+logs/
+logs_maact/
+logs_act/
+outputs/
+
+checkpoints/
+checkpoints_*/
+*.ckpt
+*.pth
+*.pt
+*.onnx
+
+# Dataset Stats
+*.pkl
+
+# System files
+.DS_Store
+Thumbs.db
+
+startouch-v1/build/
