@@ -62,8 +62,8 @@ def main():
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
     CAMERA_NAMES = ['cam_high']
-    STATE_DIM = 7
-    ACTION_DIM = 7
+    STATE_DIM = 8
+    ACTION_DIM = 8
 
     # 硬件配置
     # num_workers = 8 if args.video else 4  # 视频解码需要更多 CPU 线程

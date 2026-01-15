@@ -127,7 +127,7 @@ class RemoteSubv2:
         T_local[:3, 3] = [x, y, z]
 
         T_base_r = np.matmul(T_local[:3, :3], T_base_to_local[:3, :3])
-        1
+
         x_base, y_base, z_base = T_base_to_local[:3, 3] + T_local[:3, 3]
         rotation_base = R.from_matrix(T_base_r)
         roll_base, pitch_base, yaw_base = rotation_base.as_euler('xyz', degrees=False)
@@ -240,9 +240,9 @@ class RemoteSubv2:
             # img_grp.create_dataset('cam_high', data=np.array(self.recorded_data["images"]))
             # 加入压缩参数
             # img_grp.create_dataset('cam_high',
-            data = np.array(self.recorded_data["images"],
-            compression = "gzip",
-            compression_opts = 4)  # 级别 0-9，4 是 平衡点
+            # data = np.array(self.recorded_data["images"],
+            # compression = "gzip",
+            # compression_opts = 4)  # 级别 0-9，4 是 平衡点
 
             # Action Dataset
             f.create_dataset('action', data=np.array(self.recorded_data["action"]))

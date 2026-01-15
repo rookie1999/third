@@ -37,8 +37,8 @@ def main():
     KL_WEIGHT = 10.0
 
     CAMERA_NAMES = ['cam_high']
-    STATE_DIM = 7
-    ACTION_DIM = 7
+    STATE_DIM = 8  # 3d坐标 + 四元数 + 夹爪
+    ACTION_DIM = 8
 
     # 3. 数据集
     if not os.path.exists(STATS_PATH):

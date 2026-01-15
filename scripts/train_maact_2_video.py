@@ -63,8 +63,8 @@ def main():
 
     CAMERA_NAMES = ['cam_high']
     MAIN_CAMERA_NAME = 'cam_high'
-    STATE_DIM = 7
-    ACTION_DIM = 7
+    STATE_DIM = 8
+    ACTION_DIM = 8
     N_OBS_STEPS = 2  # MA-ACT 关键参数
 
     # 根据模式调整 num_workers

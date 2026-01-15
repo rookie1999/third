@@ -166,62 +166,63 @@ class RemoteSubv2:
         rospy.loginfo("Control loop exited.")
 
     def _write_loop(self):
-        """录制线程：作为 Master Clock，同步抓取 Image 和 Qpos"""
-        rospy.loginfo("Write loop started at 30Hz.")
+        """录制线程：同步抓取 Image 和 EEF Pose"""
+        rospy.loginfo(f"Write loop started at 30Hz. Delay shift: {self.obs_delay} steps.")
         rate = rospy.Rate(30)  # 30Hz 采样率
 
         while not self.shutdown_flag and not rospy.is_shutdown():
             if self.is_recording:
-                # 1. 第一时间：获取当前的“观测” (Observation)
-                #    这包括：当前的图像 + 当前的机械臂关节角
-
-                # --- 获取图像 (Snapshot) ---
+                # A. 获取图像
                 current_img = None
                 with self.image_lock:
                     if self.image is not None:
                         current_img = self.image.copy()
 
-                # --- 获取关节角 (Snapshot) ---
-                # 注意：这个操作可能会消耗几毫秒，但在 write 线程里没关系，不会卡控制
+                # B. [核心修改] 获取当前 EEF 位姿作为“状态” (Observation)
+                # 输入变成了 EEF，所以这里不再读关节角，而是读末端
+                current_eef_state = []
                 try:
-                    # 获取当前真实的关节状态
-                    current_joints = np.append(self._arm_instance.get_joint_positions(),
-                                               self._arm_instance.get_gripper_position())
-                    print(self._arm_instance.get_joint_positions())
-                    print(self._arm_instance.get_gripper_position())
+                    # 调用 startouchclass.py 的接口
+                    # 返回: pos(3), quat(4)
+                    pos, quat = self._arm_instance.get_ee_pose_quat()
+                    gripper = self._arm_instance.get_gripper_position()
+
+                    # 拼接成 8 维向量: [x, y, z, qx, qy, qz, qw, gripper]
+                    current_eef_state = np.concatenate([pos, quat, [gripper]])
                 except Exception as e:
-                    print(f"Error getting robot state: {e}")
-                    current_joints = []
+                    print(f"Error getting EEF state: {e}")
 
-                # --- 获取动作 (Label) ---
-                # Action 是此时刻手柄期望机器人去的地方 (Target)
-                if self.target_pose is not None:
-                    # 此时的 action 对应的是上面 observation 发生时的期望指令
-                    action = list(self.target_pose) + [self.target_clamp]
-                    # Todo: target_pose -> 关节角 转换
-                else:
-                    action = []
+                # -------------------------------------------------------
+                # 2. 存入 Buffer 与 Time Shift 处理
+                # -------------------------------------------------------
 
-                # 2. 只有当“图像”和“关节角”都有效时，才记录这一帧
-                if current_img is not None and len(current_joints) > 0 and len(action) > 0:
-                    # with self.data_lock:
-                    #     self.recorded_data["images"].append(current_img)
-                    #     self.recorded_data["qpos"].append(current_joints)  # Image 和 Qpos 对齐了
-                    #     self.recorded_data["action"].append(action)
-                    current_obs = {
+                # 只有数据有效才处理
+                if current_img is not None and len(current_eef_state) > 0:
+
+                    # === 存入 Buffer 的是当前的观测 (Input) ===
+                    # 注意：虽然变量名还叫 qpos (为了兼容 HDF5 结构)，但内容已经是 EEF 了
+                    self.obs_buffer.append({
                         "image": current_img,
-                        "qpos": current_joints
-                    }
-                    self.obs_buffer.append(current_obs)
-                    if len(self.obs_buffer) > self.future_steps:
+                        "qpos": current_eef_state
+                    })
+
+                    # === 生成训练对 (Input_Old, Output_Now) ===
+                    # 如果 Buffer 满了，说明有了足够的时间延迟
+                    if len(self.obs_buffer) > self.obs_delay:
+                        # 1. 取出 T-2 时刻的观测 (作为模型的 Input)
                         past_obs = self.obs_buffer.popleft()
-                        future_action = current_joints
+
+                        # 2. 取出 T 时刻的 EEF 状态 (作为模型的 Target Action)
+                        # 因为是模仿学习，机器人当前的真实状态就是它 T-2 时刻应该预测到的“未来”
+                        action_to_save = current_eef_state
 
                         with self.data_lock:
                             self.recorded_data["images"].append(past_obs["image"])
-                            self.recorded_data["qpos"].append(past_obs["qpos"])
-                            self.recorded_data["action"].append(future_action)
+                            self.recorded_data["qpos"].append(past_obs["qpos"])  # 存入的是过去的 EEF
+                            self.recorded_data["action"].append(action_to_save)  # 存入的是当前的 EEF
+
             rate.sleep()
+
 
     def start_recording(self):
         rospy.loginfo("Starting Recording...")
