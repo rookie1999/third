@@ -185,7 +185,7 @@ def main():
             }
 
             # Forward
-            pred_actions, (mu, logvar) = policy(batch_input)
+            pred_actions, (mu, logvar), speed_logits, flow_mask = policy(batch_input)
 
             # Loss Calc
             all_l1 = F.l1_loss(pred_actions, action, reduction='none')
@@ -193,14 +193,12 @@ def main():
             total_kld, _, _ = kl_divergence(mu, logvar)
             kl_loss = total_kld[0]
 
-            # TODO: 这里还没有获取speed_logits啊
-            # TODO: 是否要在检测到物体才计算speed_loss呢
-            speed_logits = batch_input.get('speed_logits')
-            speed_loss = 0.0
-            if speed_logits is not None:
-                # 只对 flow 有效的样本计算 loss (可选，因为 dataset 加载的都是有效 episode，通常全有效)
-                # 如果你的模型中有 is_flow_valid_batch 逻辑，可以用它 mask 一下
-                speed_loss = loss_func_speed(speed_logits, speed_labels)
+            speed_loss = torch.tensor(0.0, device=device)
+
+            if speed_logits is not None and flow_mask.sum() > 0:
+                valid_logits = speed_logits[flow_mask]
+                valid_labels = speed_labels[flow_mask]
+                speed_loss = loss_func_speed(valid_logits, valid_labels)
 
             loss = l1 + KL_WEIGHT * kl_loss + SPEED_WEIGHT * speed_loss
 

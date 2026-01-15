@@ -582,4 +582,4 @@ class SpeedACT(nn.Module):
 
         actions = self.action_head(decoder_out.transpose(0, 1))
 
-        return actions, (mu, log_sigma_x2)
+        return actions, (mu, log_sigma_x2), speed_logits, _is_flow_valid_batch_internal
