@@ -270,7 +270,7 @@ class RemoteSubv3:
             if not os.path.exists(self.video_save_dir):
                 os.makedirs(self.video_save_dir)
 
-            video_name = os.path.join(self.video_save_dir, f"episode_{self.episode_idx}.mp4")
+            video_name = os.path.join(self.video_save_dir, f"video_{self.episode_idx}.mp4")
             if images:
                 height, width, _ = images[0].shape
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')

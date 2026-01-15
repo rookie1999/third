@@ -226,7 +226,7 @@ class RemoteSubv2:
             rospy.logwarn("No data recorded, skipping save.")
             return
 
-        filename = os.path.join(self.episode_dir, f"episode_{self.episode_idx}.hdf5")
+        filename = os.path.join(self.episode_dir, f"video_{self.episode_idx}.hdf5")
         rospy.loginfo(f"Saving {data_len} steps to {filename}...")
 
         with h5py.File(filename, 'w') as f:
