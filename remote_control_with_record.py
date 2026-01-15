@@ -1,6 +1,6 @@
 import subprocess
 
-from utils import RemoteSubv2
+from utils import RemoteSubv3
 import rospy
 import time
 from piper import PiperRobot
@@ -66,7 +66,7 @@ if __name__ == "__main__":
             time.sleep(2.0)  
         if config["StarTouch"]["enable"]:
             import sys
-            sys.path.append('/home/lumos/lumos/replay_remote_ctrl/startouch-v1/interface_py')
+            sys.path.append('/home/lumos/replay_remote_ctrl/startouch-v1/interface_py')
             from startouchclass import SingleArm
             startouch = SingleArm(can_interface_=config["StarTouch"]["can_port"], gripper=True, enable_fd_=False)
             startouch_sdk = make_startouch_sdk(startouch)

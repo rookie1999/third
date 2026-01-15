@@ -13,6 +13,7 @@ import time
 import sys
 from utils import VIVE2VIVE_FLAT, transform_vive_to_gripper
 import h5py
+from datetime import datetime
 
 TRANSFORMATION = np.eye(4)
 TRANSFORMATION[:3, :3] = R.from_euler('xyz', [30, 0, 0], degrees=True).as_matrix()
@@ -23,7 +24,7 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 
-class RemoteSubv2:
+class RemoteSubv3:
     def __init__(self,
                  robot_sdk,
                  T_base2local,
@@ -237,7 +238,6 @@ class RemoteSubv2:
         self.save_episode()
 
     def save_episode(self):
-        """Save buffer to HDF5"""
         data_len = len(self.recorded_data["qpos"])
         if data_len == 0:
             rospy.logwarn("No data recorded, skipping save.")
@@ -246,74 +246,62 @@ class RemoteSubv2:
         filename = os.path.join(self.episode_dir, f"episode_{self.episode_idx}.hdf5")
         rospy.loginfo(f"Saving {data_len} steps to {filename}...")
 
+        # ---------- HDF5 ----------
         with h5py.File(filename, 'w') as f:
-            # Observations Group
             obs_grp = f.create_group('observations')
             obs_grp.create_dataset('qpos', data=np.array(self.recorded_data["qpos"]))
-
-            # 暂时取消保存图片到数据集中
-            # img_grp = obs_grp.create_group('images')
-            # 这里的 cam_name 可以根据你的摄像头命名
-            # img_grp.create_dataset('cam_high', data=np.array(self.recorded_data["images"]))
-            # 加入压缩参数
-            # img_grp.create_dataset('cam_high',
-            # data = np.array(self.recorded_data["images"],
-            # compression = "gzip",
-            # compression_opts = 4)  # 级别 0-9，4 是 平衡点
-
-            # Action Dataset
             f.create_dataset('action', data=np.array(self.recorded_data["action"]))
-            # 其他元数据 (可选)
-            # f.attrs['sim'] = False
 
-            images = self.recorded_data["images"]
+        images = self.recorded_data["images"]
 
-            if self.save_jpgs:
-                rospy.loginfo("Saving JPG images...")
-            if not os.path.exists(self.img_save_dir): os.makedirs(self.img_save_dir)
-            for step_idx, img in enumerate(images):
+        # ---------- JPG ----------
+        if self.save_jpgs:
+            rospy.loginfo("Saving JPG images...")
+            if not os.path.exists(self.img_save_dir):
+                os.makedirs(self.img_save_dir)
+            for step_idx, img in enumerate(images):  # ← 循环开始
                 img_name = f"episode_{self.episode_idx}_step_{step_idx}.jpg"
-            img_path = os.path.join(self.img_save_dir, img_name)
-            cv2.imwrite(img_path, img)
+                img_path = os.path.join(self.img_save_dir, img_name)
+                cv2.imwrite(img_path, img)  # ← 循环体内
 
-            if self.save_video:
-                rospy.loginfo("Saving MP4 video...")
-            if not os.path.exists(self.video_save_dir): os.makedirs(self.video_save_dir)
+        # ---------- MP4 ----------
+        if self.save_video:
+            rospy.loginfo("Saving MP4 video...")
+            if not os.path.exists(self.video_save_dir):
+                os.makedirs(self.video_save_dir)
 
             video_name = os.path.join(self.video_save_dir, f"episode_{self.episode_idx}.mp4")
-            if len(images) > 0:
-                height, width, layers = images[0].shape
-            # mp4v 或者 avc1 编码
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(video_name, fourcc, 30.0, (width, height))
+            if images:
+                height, width, _ = images[0].shape
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(video_name, fourcc, 30.0, (width, height))
+                for img in images:  # ← 循环写帧
+                    out.write(img)
+                out.release()
 
-            for img in images:
-                out.write(img)
-            out.release()
-
-            rospy.loginfo(f"Episode {self.episode_idx} Saved Successfully.")
-            self.episode_idx += 1
+        rospy.loginfo(f"Episode {self.episode_idx} saved successfully.")
+        self.episode_idx += 1
 
 
-def start(self):
-    """Start all threads."""
-    rospy.loginfo("Starting RobotController threads...")
-    self.shutdown_flag = False
-    # ROS1 call back
-    self.pose_thread = threading.Thread(target=self._pose_listener, daemon=True)
-    self.clamp_thread = threading.Thread(target=self._clamp_listener, daemon=True)
-    self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
-    self.write_thread = threading.Thread(target=self._write_loop, daemon=True)
-    self.camera_thread = threading.Thread(target=self._camera_loop, daemon=True)
+    def start(self):
+        """Start all threads."""
+        rospy.loginfo("Starting RobotController threads...")
+        self.shutdown_flag = False
+        # ROS1 call back
+        self.pose_thread = threading.Thread(target=self._pose_listener, daemon=True)
+        self.clamp_thread = threading.Thread(target=self._clamp_listener, daemon=True)
+        self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
+        self.write_thread = threading.Thread(target=self._write_loop, daemon=True)
+        self.camera_thread = threading.Thread(target=self._camera_loop, daemon=True)
 
-    self.pose_thread.start()
-    self.clamp_thread.start()
-    self.control_thread.start()
-    self.write_thread.start()
-    self.camera_thread.start()
+        self.pose_thread.start()
+        self.clamp_thread.start()
+        self.control_thread.start()
+        self.write_thread.start()
+        self.camera_thread.start()
 
 
-def stop(self):
-    """Graceful shutdown."""
-    rospy.loginfo("Shutting down RobotController...")
-    self.shutdown_flag = True
+    def stop(self):
+        """Graceful shutdown."""
+        rospy.loginfo("Shutting down RobotController...")
+        self.shutdown_flag = True
