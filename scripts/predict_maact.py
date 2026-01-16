@@ -30,7 +30,7 @@ from policy.maact.common.configs.configuration_act import SpeedACTConfig
 # 配置区域
 # ==========================================
 # 机器人配置
-CURRENT_ROBOT = 'xarm'
+CURRENT_ROBOT = 'startouch'
 CONFIG_FILE = 'config.yaml'
 
 # 模型路径 (请确保指向 MA-ACT 训练好的权重)
@@ -75,7 +75,6 @@ def main():
 
     # 定义预处理和后处理
     def pre_process(qpos):
-        # 确保输入维度正确，如果机器人返回多于7维，进行切片
         qpos = qpos[:STATE_DIM]
         return (qpos - stats['qpos_mean']) / stats['qpos_std']
 
@@ -143,93 +142,70 @@ def main():
     # 历史观测缓冲区: 自动保持最近 N_OBS_STEPS 帧
     obs_history = collections.deque(maxlen=N_OBS_STEPS)
 
+    print("Warming up observation buffer...")
+    for _ in range(N_OBS_STEPS):
+        t0 = time.time()  # 记录开始时间
+        img = camera.get_frame()
+        qpos = robot.get_qpos()
+        if img is not None and qpos is not None:
+            obs_history.append({'image': img, 'qpos': pre_process(qpos)})
+
+        # 扣除执行时间，精确等待
+        elapsed = time.time() - t0
+        if elapsed < DT:
+            time.sleep(DT - elapsed)
+
     try:
         while True:
-            # --- STEP 1: 获取当前观测 (t) ---
-            step_start_total = time.time()
-
-            # 读取图像 (H, W, C) RGB
-            img = camera.get_frame()
-            if img is None: continue
-
-            # 显示 (转BGR显示)
-            # cv2.imshow("Camera View", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-
-            # 读取机械臂状态
-            qpos = robot.get_qpos()  # numpy array
-
-            # --- STEP 2: 数据处理与缓冲区管理 ---
-            # 归一化当前帧状态
-            qpos_norm = pre_process(qpos)
-
-            # 存入缓冲区
-            obs_history.append({'image': img, 'qpos': qpos_norm})
-
-            # [冷启动] 如果缓冲区没满 (例如第一帧)，复制填充直到填满
-            while len(obs_history) < N_OBS_STEPS:
-                obs_history.append({'image': img, 'qpos': qpos_norm})
-
-            # --- STEP 3: 构造模型输入 ---
-
-            # 1. 堆叠图像: List[(H,W,C)] -> (T, H, W, C)
+            # 1. 堆叠图像: (T, H, W, C) -> (T, C, H, W)
             img_seq = np.stack([x['image'] for x in obs_history])
-            # 转置: (T, H, W, C) -> (T, C, H, W)
             img_seq = np.transpose(img_seq, (0, 3, 1, 2))
+            img_tensor = torch.from_numpy(img_seq).float().to(device) / 255.0
+            img_tensor = img_tensor.unsqueeze(0)  # (1, T, C, H, W)
 
-            # 转 Tensor (0-255 -> 0-1)
-            img_tensor = torch.from_numpy(img_seq).float().cuda() / 255.0
-
-            # 增加 Batch 维度 -> (1, T, C, H, W)
-            img_tensor = img_tensor.unsqueeze(0)
-
-            # [关键修正] 执行 ImageNet 归一化 (SpeedACT 必需)
-            # 此时 img_tensor 是 0-1 范围，NORM_MEAN/STD 也是针对 0-1 的
+            # ImageNet 归一化
             img_tensor = (img_tensor - NORM_MEAN) / NORM_STD
 
-            # 2. 堆叠状态: (T, D) -> (1, T, D)
+            # 2. 堆叠状态
             qpos_seq = np.stack([x['qpos'] for x in obs_history])
-            qpos_tensor = torch.from_numpy(qpos_seq).float().cuda().unsqueeze(0)
+            qpos_tensor = torch.from_numpy(qpos_seq).float().to(device).unsqueeze(0)
 
-            # --- STEP 4: 模型前向推理 ---
+            # 3. 模型前向推理
             with torch.inference_mode():
-                # 构造 MA-ACT 专用输入字典
                 batch = {
-                    "observation.state": qpos_tensor,  # (1, T, D)
-                    "observation.images": [img_tensor],  # List [(1, T, C, H, W)]
-                    # 主相机数据用于光流计算
+                    "observation.state": qpos_tensor,
+                    "observation.images": [img_tensor],
                     MAIN_CAMERA_NAME: img_tensor,
-                    # 占位 Mask (全 False 表示没有 Padding)
                     "action_is_pad": torch.zeros(1, CHUNK_SIZE, dtype=torch.bool, device=device)
                 }
-
-                # SpeedACT 返回 (actions, stats)
-                # actions: (1, Chunk_Size, Action_Dim)
-                all_actions, _ = policy(batch)
+                # SpeedACT 返回4个值，只取第一个
+                all_actions = policy(batch)[0]
 
             # 反归一化
-            all_actions = all_actions.squeeze(0).cpu().numpy()  # (Chunk, D)
+            all_actions = all_actions.squeeze(0).cpu().numpy()
             all_actions = post_process(all_actions)
 
-            # --- STEP 5: 执行动作 (Open Loop) ---
-            # 简单执行前 EXECUTION_HORIZON 步
             for t in range(EXECUTION_HORIZON):
                 loop_start = time.time()
 
-                # 发送指令
+                # A. 发送指令
                 target_action = all_actions[t]
-
-                # 安全检查：如果机器人是7自由度，确保 action 也是7维
-                if len(target_action) != 7:
-                    print(f"Warning: Action dim {len(target_action)} != 7")
-
                 robot.act(target_action)
 
-                # 频率控制
+                curr_img = camera.get_frame()
+                curr_qpos = robot.get_qpos()
+
+                if curr_img is not None and curr_qpos is not None:
+                    cv2.imshow("Camera View", cv2.cvtColor(curr_img, cv2.COLOR_RGB2BGR))
+
+                    obs_history.append({'image': curr_img, 'qpos': pre_process(curr_qpos)})
+
+                # C. 频率控制
                 loop_elapsed = time.time() - loop_start
                 if loop_elapsed < DT:
                     time.sleep(DT - loop_elapsed)
 
-                # 响应退出 (在执行子循环中也要检查)
+                # D. 响应退出
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     raise KeyboardInterrupt
 
