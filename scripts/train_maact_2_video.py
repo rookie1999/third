@@ -20,7 +20,7 @@ from policy.maact.common.model.speed_act_modulate_full_model import SpeedACT
 from dataset.utils_norm import get_norm_stats
 from scripts.utils_train import setup_logger, get_run_dirs, save_train_loss_plot, kl_divergence
 
-from dataset.efficient_ma_dataset import EfficientEpisodicDataset
+from dataset.efficient_ma_dynamic_video_dataset import EfficientEpisodicDataset
 from dataset.efficient_ma_video_dataset import VideoBasedEfficientMADataset
 
 
