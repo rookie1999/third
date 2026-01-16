@@ -1,3 +1,4 @@
+import argparse
 import pickle
 import sys
 import time
@@ -12,6 +13,8 @@ import os
 # 导入 SDK Wrapper
 # ==========================================
 from xarm.wrapper import XArmAPI
+
+from scripts.predict import setup_robot
 from utils import make_xarm_sdk, make_xarm_reader
 from utils.camera import RealSenseCamera
 from utils.robot_agent import UniversalRobotAgent
@@ -46,33 +49,17 @@ DT = 1.0 / FREQUENCY
 N_OBS_STEPS = 2
 MAIN_CAMERA_NAME = 'cam_high'  # 必须与训练时的名称一致
 
-# 维度配置 (必须与 train_maact.py 保持一致)
-STATE_DIM = 7
-ACTION_DIM = 7
-
-
-# ==========================================
-# 辅助函数
-# ==========================================
-def setup_robot(robot_type, config_path):
-    """初始化机器人硬件"""
-    with open(config_path, 'r') as f:
-        cfg = yaml.safe_load(f)
-
-    if robot_type == 'xarm':
-        ip = cfg['Xarm7']['ip']
-        arm = make_xarm_sdk(ip)
-        reader = make_xarm_reader(ip)
-        robot = UniversalRobotAgent(arm, reader)
-        return robot
-    else:
-        raise NotImplementedError(f"Robot {robot_type} not supported yet.")
 
 
 def main():
-    # -------------------------------------------------------------------------
-    # 1. 准备归一化参数 (ImageNet Stats)
-    # -------------------------------------------------------------------------
+    parser = argparse.ArgumentParser(description="ACT Training Script")
+    parser.add_argument('--joint_i', action='store_true', help='joint input')
+    parser.add_argument('--joint_o', action='store_true', help='joint output')
+    args = parser.parse_args()
+
+    STATE_DIM = 7 if args.joint_i else 8
+    ACTION_DIM = 7 if args.joint_o else 8
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # 形状: (1, 1, 3, 1, 1) 用于广播匹配 (Batch, Time, Channel, Height, Width)
@@ -137,14 +124,14 @@ def main():
     # 4. 初始化硬件
     # -------------------------------------------------------------------------
     print("Initializing robot and camera...")
-    robot = setup_robot(CURRENT_ROBOT, CONFIG_FILE)
+    robot = setup_robot(CURRENT_ROBOT, CONFIG_FILE, args.joint_i, args.joint_o)
     # 确保分辨率与 Config 一致
     camera = RealSenseCamera(width=640, height=480, fps=30)
     camera.start()
 
     # 预热相机
     for _ in range(10):
-        camera.get_image()
+        camera.get_frame()
         time.sleep(0.1)
 
     print("Hardware ready. Starting inference loop...")
@@ -162,11 +149,11 @@ def main():
             step_start_total = time.time()
 
             # 读取图像 (H, W, C) RGB
-            img = camera.get_image()
+            img = camera.get_frame()
             if img is None: continue
 
             # 显示 (转BGR显示)
-            cv2.imshow("Camera View", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            # cv2.imshow("Camera View", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
             # 读取机械臂状态
             qpos = robot.get_qpos()  # numpy array

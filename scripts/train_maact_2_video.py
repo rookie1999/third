@@ -189,7 +189,14 @@ def main():
 
             # Loss Calc
             all_l1 = F.l1_loss(pred_actions, action, reduction='none')
-            l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+
+            # l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+            n_valid = (~is_pad).sum()
+            if n_valid > 0:
+                l1 = (all_l1 * ~is_pad.unsqueeze(-1)).sum() / (n_valid * ACTION_DIM + 1e-6)
+            else:
+                l1 = torch.tensor(0.0, device=device)
+
             total_kld, _, _ = kl_divergence(mu, logvar)
             kl_loss = total_kld[0]
 

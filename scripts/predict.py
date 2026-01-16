@@ -1,3 +1,4 @@
+import argparse
 import pickle
 import sys
 import time
@@ -15,7 +16,8 @@ sys.path.append(root_dir)
 
 # 导入适配器和代理
 from policy.act.policy import ACTPolicy
-from utils import make_xarm_sdk, make_xarm_reader, make_startouch_sdk, make_startouch_reader
+from utils import make_xarm_sdk, make_xarm_reader, make_startouch_eef_sdk, make_startouch_joint_reader, \
+    make_startouch_ee_reader
 from utils.camera import RealSenseCamera
 from utils.robot_agent import UniversalRobotAgent
 
@@ -40,7 +42,7 @@ DT = 1.0 / FREQUENCY
 
 
 # ==================== 硬件初始化工厂 ====================
-def setup_robot(robot_type, config_path):
+def setup_robot(robot_type, config_path, joint_i, joint_o):
     """根据配置初始化具体的机器人，并返回通用代理"""
     with open(config_path, 'r') as f:
         cfg = yaml.safe_load(f)
@@ -64,8 +66,8 @@ def setup_robot(robot_type, config_path):
 
     elif robot_type == 'startouch':
         arm = SingleArm(can_interface_=cfg["StarTouch"]["can_port"], gripper=True)
-        startouch_write_fn = make_startouch_sdk(arm)
-        startouch_read_fn = make_startouch_reader(arm)
+        startouch_write_fn = make_startouch_joint_sdk() if joint_o else make_startouch_eef_sdk(arm)
+        startouch_read_fn = make_startouch_joint_reader() if joint_i else make_startouch_ee_reader(arm)
         return UniversalRobotAgent('startouch',
                                    startouch_read_fn,
                                    startouch_write_fn,
@@ -76,7 +78,7 @@ def setup_robot(robot_type, config_path):
         raise ValueError(f"Unknown robot type: {robot_type}")
 
 # ==================== 模型加载 ====================
-def load_model():
+def load_model(is_joint_input, is_joint_output):
     print(f"[Model] Loading stats from {STATS_PATH}...")
     with open(STATS_PATH, 'rb') as f:
         stats = pickle.load(f)
@@ -85,8 +87,8 @@ def load_model():
 
     # 这里的参数必须和训练时一致
     CAMERA_NAMES = ['cam_high']
-    STATE_DIM = 7
-    ACTION_DIM = 7
+    STATE_DIM = 7 if is_joint_input else 8
+    ACTION_DIM = 7 if is_joint_output else 8
     LR = 1e-4
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
@@ -121,9 +123,17 @@ def load_model():
 
 # ==================== 主函数 ====================
 def main():
+    parser = argparse.ArgumentParser(description="ACT Training Script")
+    parser.add_argument('--joint_i', action='store_true', help='joint input')
+    parser.add_argument('--joint_o', action='store_true', help='joint output')
+    args = parser.parse_args()
+
+    NORM_MEAN = torch.tensor([0.485, 0.456, 0.406]).cuda().view(1, 1, 3, 1, 1)
+    NORM_STD = torch.tensor([0.229, 0.224, 0.225]).cuda().view(1, 1, 3, 1, 1)
+
     # 1. 准备硬件
     try:
-        robot = setup_robot(CURRENT_ROBOT, CONFIG_FILE)
+        robot = setup_robot(CURRENT_ROBOT, CONFIG_FILE, args.joint_i, args.joint_o)
         camera = RealSenseCamera()
     except Exception as e:
         print(f"Hardware initialization failed: {e}")
@@ -170,6 +180,9 @@ def main():
 
             img_tensor = torch.from_numpy(img).float().cuda() / 255.0
             img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0).unsqueeze(0)  # (1, 1, 3, H, W)
+
+            # TODO: 暂时关闭，以符合之前的训练结果
+            # img_tensor = (img_tensor - NORM_MEAN) / NORM_STD
 
             # --- STEP 3: 模型推理 ---
             with torch.inference_mode():

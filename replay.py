@@ -3,7 +3,7 @@ from piper import PiperRobot
 from RoboticsToolBox import Bestman_Real_Xarm6
 from utils import TrajReplayer
 from utils import select_multi_sessions_dir, select_session_subdir,load_trajectory,transform_traj
-from utils import make_piper_sdk, make_xarm_sdk,make_startouch_sdk
+from utils import make_piper_sdk, make_xarm_sdk,make_startouch_eef_sdk
 import os
 import numpy as np
 import time
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         # StarTouch
         if config["StarTouch"]["enable"]:
             startouch = SingleArm(can_interface_=config["StarTouch"]["can_port"], gripper=True, enable_fd_=False)
-            startouch_sdk = make_startouch_sdk(startouch)
+            startouch_sdk = make_startouch_eef_sdk(startouch)
             startouch.set_joint(config["StarTouch"]["initial_joints"], tf=3)
             time.sleep(1.0)
     except Exception as e:

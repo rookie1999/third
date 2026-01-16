@@ -4,7 +4,7 @@ from utils import RemoteSubv3
 import rospy
 import time
 from piper import PiperRobot
-from utils import make_piper_sdk,make_xarm_sdk, make_startouch_sdk
+from utils import make_piper_sdk,make_xarm_sdk, make_startouch_eef_sdk
 import yaml
 from xarm.wrapper import XArmAPI
 import numpy as np
@@ -69,7 +69,7 @@ if __name__ == "__main__":
             sys.path.append('/home/lumos/replay_remote_ctrl/startouch-v1/interface_py')
             from startouchclass import SingleArm
             startouch = SingleArm(can_interface_=config["StarTouch"]["can_port"], gripper=True, enable_fd_=False)
-            startouch_sdk = make_startouch_sdk(startouch)
+            startouch_sdk = make_startouch_eef_sdk(startouch)
             startouch.set_joint(config["StarTouch"]["initial_joints"], tf=3)
             # print('*****************', startouch.get_joint_positions())
             time.sleep(1.0)

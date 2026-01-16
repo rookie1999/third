@@ -25,7 +25,7 @@ def make_piper_sdk(piper_instance):
     return piper_sdk
 
 
-def make_startouch_sdk(arm_instance):
+def make_startouch_eef_sdk(arm_instance):
     def startouch_sdk(pose, width, speed=100):
         arm_instance.set_end_effector_pose_euler_raw(np.array(pose[:3]), np.array(pose[3:]))
         ratio = np.clip(width / 80, 0, 1)
@@ -71,10 +71,17 @@ def make_piper_reader(piper_instance):
     return reader_fn
 
 
-def make_startouch_reader(arm_instance):
+def make_startouch_joint_reader(arm_instance):
     def reader_fn():
-        # StarTouch 获取状态
-        joints = arm_instance.get_joint_positions()  # 如果模型是用Joint训练
+        joints = arm_instance.get_joint_positions()
+        gripper = arm_instance.get_gripper_position()
+        return np.array(list(joints) + [gripper])
+
+    return reader_fn
+
+def make_startouch_ee_reader(arm_instance):
+    def reader_fn():
+        joints = arm_instance.get_ee_pose_quat()
         gripper = arm_instance.get_gripper_position()
         return np.array(list(joints) + [gripper])
 

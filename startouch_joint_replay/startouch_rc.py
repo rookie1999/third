@@ -2,7 +2,7 @@ from utils import RemoteSub
 import rospy
 import time
 from piper import PiperRobot
-from utils import make_piper_sdk,make_xarm_sdk, make_startouch_sdk
+from utils import make_piper_sdk,make_xarm_sdk, make_startouch_eef_sdk
 import yaml
 from xarm.wrapper import XArmAPI
 import numpy as np
@@ -44,7 +44,7 @@ if __name__ == "__main__":
             time.sleep(2.0)  
         if config["StarTouch"]["enable"]:
             startouch = SingleArm(can_interface_=config["StarTouch"]["can_port"], gripper=True, enable_fd_=False)
-            startouch_sdk = make_startouch_sdk(startouch)
+            startouch_sdk = make_startouch_eef_sdk(startouch)
             startouch.set_joint(config["StarTouch"]["initial_joints"], tf=3)
             time.sleep(1.0)
     except Exception as e:

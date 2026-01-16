@@ -161,10 +161,9 @@ def main():
             logger.error(f"❌ Checkpoint file not found: {args.resume}")
             return
 
-    # ==========================
-    # 4. 训练循环 (完全复用，无需修改)
-    # ==========================
     best_loss = float('inf')
+    NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 1, 3, 1, 1)
+    NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 1, 3, 1, 1)
     train_losses = []
     total_start_time = time.time()
 
@@ -182,6 +181,8 @@ def main():
             qpos = qpos.to(device, non_blocking=True)
             action = action.to(device, non_blocking=True)
             is_pad = is_pad.to(device, non_blocking=True)
+
+            image = (image - NORM_MEAN) / NORM_STD
 
             loss_dict = policy(qpos, image, action, is_pad)
             loss = loss_dict['loss']
