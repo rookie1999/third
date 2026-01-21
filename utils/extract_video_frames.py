@@ -25,4 +25,4 @@ def extract_frames(video_path, output_folder):
     print(f"Extracted {idx} frames to {output_folder}")
 
 # 使用方法
-# extract_frames("data/episode_0.mp4", "data/episode_0_images")
+extract_frames(r"F:\projects\lumos\data\20260121_dp\0\video\video_0.mp4", r"F:\projects\lumos\data\img\0")

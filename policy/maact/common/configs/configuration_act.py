@@ -62,3 +62,5 @@ class SpeedACTConfig:
 
     # 预融合 Dropout
     pre_fusion_dropout: float = 0.01
+
+    gmflow_ckpt_path: Optional[str] = None

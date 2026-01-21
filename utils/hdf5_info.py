@@ -5,7 +5,7 @@ import os
 
 # ================= 配置 =================
 # 这里填入你刚才生成的 .hdf5 文件路径
-FILE_PATH = r'F:\projects\lumos\data\20260121_dp\20260121_all_rot\episode\episode_0.hdf5'
+FILE_PATH = r'F:\projects\lumos\data\20260121_dp\20260121_all_rot\episode\episode_52.hdf5'
 
 
 # =======================================
