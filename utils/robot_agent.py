@@ -1,3 +1,6 @@
+import time
+
+
 class UniversalRobotAgent:
     def __init__(self, name, read_fn, write_fn, arm, initial_joints):
         self.name = name
@@ -20,6 +23,16 @@ class UniversalRobotAgent:
         gripper_cmd = action_vector[-1]
         self._write_fn(robot_cmd, gripper_cmd, speed=20)
 
-    def go_home(self):
+    def go_home(self, blocking=True, duration=3.0):
+        """
+        让机械臂回到初始位置
+        :param blocking: 是否阻塞等待
+        :param duration: 预估的归位耗时（秒），用于阻塞
+        """
+        print("🤖 Robot going home...")
         if self.name == "startouch":
-            self.arm.set_joint_raw(self.initial_joints, velocities = [0, 0, 0, 0, 0, 0])
+            self.arm.set_joint(self.initial_joints)
+
+        if blocking:
+            time.sleep(duration)
+            print("✅ Robot is at home.")

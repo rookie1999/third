@@ -42,7 +42,7 @@ DT = 1.0 / FREQUENCY
 
 
 # ==================== 硬件初始化工厂 ====================
-def setup_robot(robot_type, config_path, joint_i, joint_o):
+def setup_robot(robot_type, config_path, joint_i, joint_o, STATE_DIM=7, ACTION_DIM=7):
     """根据配置初始化具体的机器人，并返回通用代理"""
     with open(config_path, 'r') as f:
         cfg = yaml.safe_load(f)
@@ -68,8 +68,8 @@ def setup_robot(robot_type, config_path, joint_i, joint_o):
         arm = SingleArm(can_interface_=cfg["StarTouch"]["can_port"], gripper=True)
         arm.setGripperPosition(1)
         time.sleep(1)
-        startouch_write_fn = make_startouch_joint_sdk() if joint_o else make_startouch_eef_rpy_sdk(arm)
-        startouch_read_fn = make_startouch_joint_reader() if joint_i else make_startouch_ee_rpy_reader(arm)
+        startouch_write_fn = make_startouch_joint_sdk() if joint_o else make_startouch_eef_rpy_sdk(arm) if ACTION_DIM == 7 else make_startouch_eef_rot_sdk(arm)
+        startouch_read_fn = make_startouch_joint_reader() if joint_i else make_startouch_ee_rpy_reader(arm) if STATE_DIM == 7 else make_startouch_ee_rot_reader(arm)
         return UniversalRobotAgent('startouch',
                                    startouch_read_fn,
                                    startouch_write_fn,
