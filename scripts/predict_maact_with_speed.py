@@ -1,18 +1,13 @@
 import argparse
+import os
 import pickle
 import sys
 import time
-import collections
-import numpy as np
+
 import cv2
 import torch
-import yaml
-import os
 
-# ==========================================
-# 导入 SDK Wrapper
-# ==========================================
-from xarm.wrapper import XArmAPI
+from policy.maact.common.model.speed_act_with_speed import SpeedACT
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -21,15 +16,8 @@ sys.path.append(project_root)
 sys.path.append('/home/lumos/act_move/replay_remote_ctrl')
 
 from scripts.predict import setup_robot
-from utils import make_xarm_sdk, make_xarm_reader
 from utils.camera import RealSenseCamera
-from utils.robot_agent import UniversalRobotAgent
 
-# ==========================================
-# 导入 MA-ACT 模型组件
-# ==========================================
-# 请根据实际路径调整 import
-from policy.maact.common.model.speed_act_modulate_full_model import SpeedACT
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
 
 # ==========================================
@@ -160,7 +148,7 @@ def main():
         main_camera=MAIN_CAMERA_NAME,
         robot_state_feature=(STATE_DIM,),
         action_feature=(ACTION_DIM,),
-        use_optical_flow=True,
+        use_optical_flow=False,
         num_speed_categories=NUM_SPEED_CATEGORIES,
         feedforward_activation="relu",
         pre_norm=False,

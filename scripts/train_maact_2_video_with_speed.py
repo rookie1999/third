@@ -4,18 +4,19 @@ import os
 import pickle
 import sys
 import time
+from datetime import timedelta
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from datetime import timedelta
 
+from policy.maact.common.model.speed_act_with_speed import SpeedACT
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 from dataset.efficient_dataset import EfficientEpisodicDataset
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
-from policy.maact.common.model.speed_act_modulate_full_model import SpeedACT
 from dataset.utils_norm import get_norm_stats
 from scripts.utils_train import setup_logger, get_run_dirs, save_train_loss_plot, kl_divergence
 

@@ -12,7 +12,6 @@ from torchvision.ops import FrozenBatchNorm2d
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
 from policy.maact.common.model.base_act import ACTSinusoidalPositionEmbedding2d, ACTEncoder, \
     create_sinusoidal_pos_embedding, ACTDecoder
-from policy.maact.optical_flow.pwc import predict
 
 # 日志配置：设置为 WARNING 级别，减少不必要的输出
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,89 +27,6 @@ def get_dim_size(feature, index=0):
     else:
         # 假如传进来的既不是对象也不是元组（比如是 None），根据情况处理
         return 0
-
-# +++ NEW +++
-# 我们最终设计的、用于替代 EncoderPreFusionModule 的全新融合模块
-# 它可以处理不同长度的视觉和光流输入
-class DecoupledModulationModule(nn.Module):
-    """
-    Implements a novel Decoupled Dual-Grained Conditional Modulation for fusion.
-    It handles mismatched sequence lengths by using FiLM for global modulation
-    and cross-attention for local, fine-grained modulation.
-    """
-
-    def __init__(self, dim_model: int, num_heads: int, dropout: float = 0.1):
-        super().__init__()
-        self.dim_model = dim_model
-        self.num_heads = num_heads
-
-        # 1. 全局调制器 (Coarse-Grained Global Modulator)
-        #    输入是 D_model 维的 aggregated_flow_feature
-        self.global_film_generator = nn.Sequential(
-            nn.Linear(dim_model, dim_model * 2),
-            nn.ReLU(),
-            nn.Linear(dim_model * 2, dim_model * 2)
-        )
-
-        # 2. 局部调制器 (Fine-Grained Local Modulator via Cross-Attention)
-        self.local_cross_attention = nn.MultiheadAttention(
-            embed_dim=dim_model,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True  # 确保输入输出的 batch 维度在前
-        )
-        self.dropout_local = nn.Dropout(dropout)
-        self.norm_local = nn.LayerNorm(dim_model)
-
-        # 最终输出前的归一化
-        self.norm_out = nn.LayerNorm(dim_model)
-
-    def forward(self, visual_tokens: Tensor, flow_tokens: Tensor, is_flow_valid_batch: Tensor) -> Tensor:
-        # visual_tokens: (B, N_visual, D)
-        # flow_tokens: (B, N_flow, D) -> N_visual 和 N_flow 可以不同
-        # is_flow_valid_batch: (B,)
-
-        batch_size = visual_tokens.shape[0]
-
-        # --- 步骤〇：准备工作 ---
-        # 对无效样本的 flow_tokens 进行置零，这在注意力中也能起到抑制作用
-        flow_gate_mask = is_flow_valid_batch.float().view(batch_size, 1, 1)
-        gated_flow_tokens = flow_tokens * flow_gate_mask
-
-        # --- 步骤一：全局定调 (Coarse-Grained Global Tuning) ---
-        # 计算全局运动摘要 (只对有效的样本进行)
-        aggregated_flow_feature = torch.zeros(batch_size, self.dim_model, device=visual_tokens.device)
-        valid_indices = torch.where(is_flow_valid_batch)[0]
-        if valid_indices.numel() > 0:
-            aggregated_flow_feature[valid_indices] = gated_flow_tokens[valid_indices].abs().mean(dim=1)
-
-        # 生成全局 FiLM 参数
-        global_film_params = self.global_film_generator(aggregated_flow_feature)
-        gamma_global, beta_global = torch.chunk(global_film_params, 2, dim=-1)
-
-        # 应用全局调制
-        globally_modulated_visual = visual_tokens * gamma_global.unsqueeze(1) + beta_global.unsqueeze(1)
-
-        # --- 步骤二：局部精调 (Fine-Grained Local Tuning via Cross-Attention) ---
-        # Query: 经过全局调制的视觉token (长度 N_visual)
-        # Key, Value: 门控后的光流token (长度 N_flow)
-        local_motion_update, _ = self.local_cross_attention(
-            query=globally_modulated_visual,
-            key=gated_flow_tokens,
-            value=gated_flow_tokens
-        )  # 输出 local_motion_update 的形状是 (B, N_visual, D)
-
-        # 添加残差连接和归一化，完成局部精调
-        fine_tuned_visual = self.norm_local(
-            globally_modulated_visual + self.dropout_local(local_motion_update)
-        )
-
-        # --- 步骤三：最终输出 ---
-        # 此时 fine_tuned_visual 已经是融合后的最终结果
-        # 我们再加一个到原始视觉的残差连接，以稳定训练
-        final_fused_tokens = self.norm_out(visual_tokens + fine_tuned_visual)
-
-        return final_fused_tokens
 
 
 class BasicResidualBlock(nn.Module):
@@ -138,69 +54,6 @@ class BasicResidualBlock(nn.Module):
         out += self.shortcut(identity)
         out = self.relu(out)
         return out
-
-
-class OpticalFlowEncoder(nn.Module):
-    """Encodes a cropped optical flow map (2 channels: u, v) into a sequence of features."""
-
-    def __init__(self, input_h: int, input_w: int, dim_model: int):
-        super().__init__()
-
-        self.initial_conv = nn.Sequential(
-            nn.Conv2d(2, 64, kernel_size=7, stride=1, padding=3, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
-        )
-
-        self.layer1 = self._make_layer(BasicResidualBlock, 64, 64, num_blocks=2, stride=1)
-        self.layer2 = self._make_layer(BasicResidualBlock, 64, 128, num_blocks=2, stride=2)
-        self.layer3 = self._make_layer(BasicResidualBlock, 128, 256, num_blocks=2, stride=2)
-        self.layer4 = self._make_layer(BasicResidualBlock, 256, 256, num_blocks=2, stride=1)
-        self.final_proj = nn.Conv2d(256, dim_model, kernel_size=1)
-
-        dummy_input = torch.zeros(1, 2, input_h, input_w)
-        with torch.no_grad():
-            dummy_output = self.initial_conv(dummy_input)
-            dummy_output = self.layer1(dummy_output)
-            dummy_output = self.layer2(dummy_output)
-            dummy_output = self.layer3(dummy_output)
-            dummy_output = self.layer4(dummy_output)
-            dummy_output = self.final_proj(dummy_output)
-
-        self.output_h = dummy_output.shape[-2]
-        self.output_w = dummy_output.shape[-1]
-        self.num_output_tokens = self.output_h * self.output_w
-
-        self.pos_embed = ACTSinusoidalPositionEmbedding2d(dim_model // 2)
-        self.norm_out = nn.LayerNorm(dim_model)
-
-        logger.info(
-            f"OpticalFlowEncoder output features: H={self.output_h}, W={self.output_w}, Tokens={self.num_output_tokens}")
-
-    def _make_layer(self, block: type[nn.Module], in_channels: int, out_channels: int, num_blocks: int,
-                    stride: int) -> nn.Sequential:
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for i, s in enumerate(strides):
-            current_in_channels = in_channels if i == 0 else out_channels
-            layers.append(block(current_in_channels, out_channels, s))
-        return nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.initial_conv(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.final_proj(x)
-
-        pos_embed = self.pos_embed(x).to(dtype=x.dtype)
-        x = x + pos_embed
-        x = einops.rearrange(x, "b d h w -> b (h w) d")
-        x = self.norm_out(x)
-        return x
-
 
 class SpeedACT(nn.Module):
     def __init__(self, config: SpeedACTConfig):
