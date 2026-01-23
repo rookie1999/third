@@ -411,8 +411,34 @@ class SpeedACT(nn.Module):
             with torch.no_grad():
                 resized_prev_images = self.detection_image_transform(prev_images)
                 resized_current_images = self.detection_image_transform(current_images)
+                print(resized_current_images.shape)
+                print(resized_current_images)
 
                 current_optical_flow_batch = predict(resized_prev_images, resized_current_images, self.config.device)
+
+                if True:
+                    import cv2
+                    import numpy as np
+
+                    # 1. 保存输入图片，确认反归一化是否正确 (变回正常彩色图)
+                    # debug_img = denorm_curr[0].permute(1, 2, 0).cpu().numpy() * 255.0
+                    debug_img = current_images[0].permute(1, 2, 0).cpu().numpy() * 255.0
+                    debug_img = cv2.cvtColor(debug_img.astype(np.uint8), cv2.COLOR_RGB2BGR)
+                    cv2.imwrite("debug_input_rgb.jpg", debug_img)
+
+                    # 2. 保存光流图
+                    flow_tensor = current_optical_flow_batch[0].cpu().permute(1, 2, 0).numpy()  # (H, W, 2)
+                    # 极坐标转换
+                    mag, ang = cv2.cartToPolar(flow_tensor[..., 0], flow_tensor[..., 1])
+                    h, w = mag.shape
+                    hsv = np.zeros((h, w, 3), dtype=np.uint8)
+                    hsv[..., 1] = 255
+                    hsv[..., 0] = ang * 180 / np.pi / 2
+                    # 归一化 magnitude 以便观察 (根据实际噪声大小调整，如果全是噪点会很亮)
+                    hsv[..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+                    bgr_flow = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+                    cv2.imwrite("debug_optical_flow.jpg", bgr_flow)
 
             flow_input = torch.nn.functional.interpolate(
                 current_optical_flow_batch,

@@ -54,33 +54,33 @@ class GMFlowWrapper(nn.Module):
         Returns:
             flow: [B, 2, H, W]
         """
-        # --- 数据预处理 ---
-        # GMFlow 内部 normalize_img 假设输入是 [0, 255]
-        # 如果输入是 [0, 1] (通常 PyTorch dataloader 出来的结果)，需要缩放
-        if image1.max() <= 1.1:
-            img1_input = image1 * 255.0
-            img2_input = image2 * 255.0
-        else:
-            img1_input = image1
-            img2_input = image2
+        with torch.no_grad():
+            # 2. 确保模型处于 eval 模式 (例如关闭 Dropout)
+            self.model.eval()
 
-        # GMFlow 推理参数
-        attn_splits_list = [2]
-        corr_radius_list = [-1]
-        prop_radius_list = [-1]
+            # --- 数据预处理 ---
+            if image1.max() <= 1.1:
+                img1_input = image1 * 255.0
+                img2_input = image2 * 255.0
+            else:
+                img1_input = image1
+                img2_input = image2
 
-        self.model.eval()
+            # GMFlow 推理参数
+            attn_splits_list = [2]
+            corr_radius_list = [-1]
+            prop_radius_list = [-1]
 
-        results_dict = self.model(
-            img1_input,
-            img2_input,
-            attn_splits_list=attn_splits_list,
-            corr_radius_list=corr_radius_list,
-            prop_radius_list=prop_radius_list,
-            pred_bidir_flow=False
-        )
+            results_dict = self.model(
+                img1_input,
+                img2_input,
+                attn_splits_list=attn_splits_list,
+                corr_radius_list=corr_radius_list,
+                prop_radius_list=prop_radius_list,
+                pred_bidir_flow=False
+            )
 
-        # 取出最终的光流结果
-        flow = results_dict['flow_preds'][-1]  # [B, 2, H, W]
+            flow = results_dict['flow_preds'][-1]  # [B, 2, H, W]
 
-        return flow
+            # 3. 显式 detach，彻底切断梯度流
+            return flow.detach()

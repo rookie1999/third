@@ -1,5 +1,4 @@
 import argparse
-import os
 import pickle
 import sys
 import time
@@ -7,20 +6,21 @@ import time
 import cv2
 import torch
 import yaml
-
 # 导入 SDK Wrapper
 # from xarm.wrapper import XArmAPI
+
+import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 sys.path.append(root_dir)
 
 # 导入适配器和代理
 from policy.act.policy import ACTPolicy
-from utils import make_xarm_sdk, make_xarm_reader, make_startouch_joint_reader, \
-    make_startouch_ee_rot_reader, make_startouch_joint_sdk
+from utils import make_xarm_sdk, make_xarm_reader, make_startouch_eef_rot_sdk, make_startouch_joint_reader, \
+    make_startouch_ee_rot_reader, make_startouch_joint_sdk, make_startouch_ee_rot_reader, make_startouch_eef_rpy_sdk, make_startouch_ee_rpy_reader
 from utils.camera import RealSenseCamera
 from utils.robot_agent import UniversalRobotAgent
-
+import numpy as np
 
 startouch_path = os.path.join(root_dir, 'startouch-v1', 'interface_py')
 if startouch_path not in sys.path:
@@ -33,10 +33,10 @@ CURRENT_ROBOT = 'startouch'
 CONFIG_FILE = 'config.yaml'
 
 # 模型参数
-CKPT_PATH = '/home/benson/projects/lumos/run_20260113_093204/checkpoints/policy_best.ckpt'
-STATS_PATH = '/home/benson/projects/lumos/run_20260113_093204/checkpoints/dataset_stats.pkl'
+CKPT_PATH = '/home/lumos/act_move/checkpoints/act/policy_epoch_599.ckpt'
+STATS_PATH = '/home/lumos/act_move/checkpoints/act/dataset_stats.pkl'
 CHUNK_SIZE = 50  # 预测步长
-EXECUTION_HORIZON = 30  # 执行步长 (Open Loop)
+EXECUTION_HORIZON = 20  # 执行步长 (Open Loop)
 FREQUENCY = 30  # 控制频率 Hz
 DT = 1.0 / FREQUENCY
 
@@ -66,8 +66,10 @@ def setup_robot(robot_type, config_path, joint_i, joint_o):
 
     elif robot_type == 'startouch':
         arm = SingleArm(can_interface_=cfg["StarTouch"]["can_port"], gripper=True)
-        startouch_write_fn = make_startouch_joint_sdk() if joint_o else make_startouch_ee_rot_reader(arm)
-        startouch_read_fn = make_startouch_joint_reader() if joint_i else make_startouch_ee_rot_reader(arm)
+        arm.setGripperPosition(1)
+        time.sleep(1)
+        startouch_write_fn = make_startouch_joint_sdk() if joint_o else make_startouch_eef_rpy_sdk(arm)
+        startouch_read_fn = make_startouch_joint_reader() if joint_i else make_startouch_ee_rpy_reader(arm)
         return UniversalRobotAgent('startouch',
                                    startouch_read_fn,
                                    startouch_write_fn,
@@ -77,36 +79,19 @@ def setup_robot(robot_type, config_path, joint_i, joint_o):
     else:
         raise ValueError(f"Unknown robot type: {robot_type}")
 
+# ==================== 模型加载 ====================
 def load_model(is_joint_input, is_joint_output):
     print(f"[Model] Loading stats from {STATS_PATH}...")
     with open(STATS_PATH, 'rb') as f:
         stats = pickle.load(f)
 
-        # ================= [新增] 强制检查并修复 std =================
-        import numpy as np
-        # 定义最小阈值：0.01
-        # 对于位置(m)代表1cm，对于弧度代表0.5度，对于夹爪(0-1)代表1%
-        MIN_STD = 1e-2
-
-        # 打印原始值进行调试
-        print(f"Original Action Std: {stats['action_std']}")
-
-        # 强制将小于 MIN_STD 的值提升到 MIN_STD
-        if np.any(stats['action_std'] < MIN_STD):
-            print("⚠️ Warning: Detected small action_std, clamping to 0.01 to prevent motion loss.")
-            stats['action_std'] = np.maximum(stats['action_std'], MIN_STD)
-
-        # 同理处理 qpos
-        if np.any(stats['qpos_std'] < MIN_STD):
-            stats['qpos_std'] = np.maximum(stats['qpos_std'], MIN_STD)
-        # ===========================================================
-
     print(f"[Model] Loading weights from {CKPT_PATH}...")
 
     # 这里的参数必须和训练时一致
     CAMERA_NAMES = ['cam_high']
-    STATE_DIM = 7 if is_joint_input else 10
-    ACTION_DIM = 7 if is_joint_output else 10
+    STATE_DIM = 7 if is_joint_input else 7
+    ACTION_DIM = 7 if is_joint_output else 7
+    LR = 1e-4
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
     args_override = {
@@ -164,6 +149,7 @@ def main():
         camera.stop()
         return
 
+    # 数据归一化工具 (Lambda)
     pre_process = lambda qpos: (qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda action: action * stats['action_std'] + stats['action_mean']
 
@@ -171,9 +157,13 @@ def main():
     print(f" Start Inference Loop ({CURRENT_ROBOT})")
     print(" Press 'q' in window to Stop.")
     print("=" * 50)
+    # robot.command_action(np.array([0.30240757, 0.01034589,0.18278981, 0.03465579, 0.00971405, 0.0560794, 0.61916577]))
+
 
     try:
         while True:
+            # --- STEP 1: 获取观测 (Observation) ---
+            t0 = time.time()
             img = camera.get_frame()
             qpos_numpy = robot.get_qpos()
 
@@ -183,30 +173,34 @@ def main():
                 continue
 
             # 显示图像
-            # cv2.imshow(f"Robot View ({CURRENT_ROBOT})", img)
-            # if cv2.waitKey(1) & 0xFF == ord('q'):
-            #     break
+            cv2.imshow(f"Robot View ({CURRENT_ROBOT})", img)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
+            # --- STEP 2: 数据预处理 ---
+            # 构造 Torch Tensor
             qpos = pre_process(qpos_numpy)
             qpos_tensor = torch.from_numpy(qpos).float().cuda().unsqueeze(0)  # (1, state_dim)
 
             img_tensor = torch.from_numpy(img).float().cuda() / 255.0
             img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0).unsqueeze(0)  # (1, 1, 3, H, W)
 
-            # ACT算法内部已经进行了归一化
             # img_tensor = (img_tensor - NORM_MEAN) / NORM_STD
 
             # --- STEP 3: 模型推理 ---
             with torch.inference_mode():
+                # ACT Forward
                 all_actions = policy(qpos_tensor, img_tensor)
-
+            print(all_actions)
             # 反归一化
             all_actions = all_actions.squeeze(0).cpu().numpy()
             all_actions = post_process(all_actions)  # (CHUNK_SIZE, action_dim)
 
             for t in range(EXECUTION_HORIZON):
                 step_start = time.time()
+                # 获取当前时刻的动作
                 action = all_actions[t]
+                print(action)
                 robot.command_action(action)
                 # 频率控制
                 elapsed = time.time() - step_start
@@ -214,6 +208,7 @@ def main():
                     time.sleep(DT - elapsed)
 
                 # 在执行子循环中也要响应退出
+                # cv2.imshow(f"Robot View ({CURRENT_ROBOT})", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     raise KeyboardInterrupt
 

@@ -172,7 +172,7 @@ def main():
 
             batch_input = {
                 "observation.state": qpos, "action": action, "action_is_pad": is_pad,
-                "observation.images": norm_imgs, MAIN_CAMERA_NAME: norm_imgs[0]
+                "observation.images": norm_imgs, MAIN_CAMERA_NAME: images_list[0]
             }
 
             pred_actions, (mu, logvar), speed_logits, flow_mask = policy(batch_input)
