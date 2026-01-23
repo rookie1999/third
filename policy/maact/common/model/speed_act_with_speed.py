@@ -173,7 +173,6 @@ class SpeedACT(nn.Module):
             batch_size = batch["observation.environment_state"].shape[0]
         elif "observation.state" in batch:
             batch_size = batch["observation.state"].shape[0]
-            logger.warning("Batch size inferred from 'observation.state' as no images or env state found.")
         else:
             raise ValueError(
                 "Could not determine batch size from input batch. Need images, environment_state, or state.")
@@ -188,6 +187,8 @@ class SpeedACT(nn.Module):
 
             if self.config.robot_state_feature is not None:
                 robot_state_embed = self.vae_encoder_robot_state_input_proj(batch["observation.state"])
+                if robot_state_embed.dim() == 2:
+                    robot_state_embed = robot_state_embed.unsqueeze(1)
                 vae_encoder_input_tokens.append(robot_state_embed)
 
             action_embed = self.vae_encoder_action_input_proj(batch["action"])
@@ -224,7 +225,7 @@ class SpeedACT(nn.Module):
         if self.config.image_features:
             current_cam_images = []
             for cam_id, cam_name in enumerate(self.config.image_features.keys()):
-                current_cam_images.append(batch["observation.images"][cam_id][:, -1, :, :, :])
+                current_cam_images.append(batch["observation.images"][cam_id])
             stacked_images = torch.stack(current_cam_images, dim=1)
             flat_images = einops.rearrange(stacked_images, 'b c img_c h w -> (b c) img_c h w')
             cam_feat = self.backbone(flat_images)["feature_map"]
@@ -243,7 +244,7 @@ class SpeedACT(nn.Module):
         single_logical_timestep_tokens_list.append(latent_token)
 
         if self.config.robot_state_feature is not None:
-            robot_state_token = self.encoder_robot_state_input_proj(batch["observation.state"][:, -1, :]).unsqueeze(1)
+            robot_state_token = self.encoder_robot_state_input_proj(batch["observation.state"]).unsqueeze(1)
             single_logical_timestep_tokens_list.append(robot_state_token)
 
         speed_idx = batch["speed_label"]  # (B,)

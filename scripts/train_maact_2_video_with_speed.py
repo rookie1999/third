@@ -10,13 +10,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from policy.maact.common.model.speed_act_with_speed import SpeedACT
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
+
 from dataset.efficient_dataset import EfficientEpisodicDataset
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
+from policy.maact.common.model.speed_act_with_speed import SpeedACT
 from dataset.utils_norm import get_norm_stats
 from scripts.utils_train import setup_logger, get_run_dirs, save_train_loss_plot, kl_divergence
 
@@ -34,7 +34,7 @@ def main():
     # 路径配置
     if args.video:
         # 视频模式：指向 episode 文件夹 (代码会自动找同级的 video 文件夹)
-        DATA_DIR = r'F:\projects\lumos\data\20260109\episode'
+        DATA_DIR = r'/home/zgz/projects/lumos/data/20260121_all_rot/episode'
     else:
         # 原始模式：指向包含全量数据的 hdf5 文件夹
         DATA_DIR = r'F:\projects\lumos\data\20260109'
@@ -49,7 +49,7 @@ def main():
     # 超参数配置
     NUM_EPOCHS = 1000
     BATCH_SIZE = 64
-    LR = 1e-4
+    LR = 1e-5
     LR_BACKBONE = 1e-5
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
@@ -149,8 +149,12 @@ def main():
 
     best_loss = float('inf')
     train_losses = []
-    NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 1, 3, 1, 1)
-    NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 1, 3, 1, 1)
+    if N_OBS_STEPS == 1:
+        NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+        NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+    else:
+        NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 1, 3, 1, 1)
+        NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 1, 3, 1, 1)
 
     total_start_time = time.time()
 
