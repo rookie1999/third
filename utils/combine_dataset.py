@@ -82,13 +82,12 @@ def merge_datasets(source_folders, target_folder):
 
 # 在这里填入你现在的三个文件夹路径
 source_dirs = [
-    r'F:\projects\lumos\data\20260121_dp\0',
-    r'F:\projects\lumos\data\20260121_dp\1',
-    r'F:\projects\lumos\data\20260121_dp\2',
+    r'F:\projects\lumos\data\20260123_17\20260123_172343',
+    r'F:\projects\lumos\data\20260123_17\20260123_173214',
 ]
 
 # 在这里填入你想保存的新路径
-output_dir = r'F:\projects\lumos\data\20260121_dp\20260121_all'
+output_dir = r'F:\projects\lumos\data\20260123_17\fastumi_0123'
 
 # ================= 运行脚本 =================
 if __name__ == '__main__':

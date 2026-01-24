@@ -48,7 +48,7 @@ def main():
 
     # 超参数配置
     NUM_EPOCHS = 1000
-    BATCH_SIZE = 64
+    BATCH_SIZE = 128
     LR = 1e-5
     LR_BACKBONE = 1e-5
     CHUNK_SIZE = 50

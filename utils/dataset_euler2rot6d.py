@@ -154,5 +154,5 @@ if __name__ == "__main__":
 
     process_folder(args.input, args.output)
     """
-    python utils/convert_dataset_rotation.py --input "F:\projects\lumos\data\20260121_dp\20260121_all\episode" --output "F:\projects\lumos\data\20260121_dp\20260121_all_rot\episode"
+    python utils/dataset_euler2rot6d.py --input "F:\projects\lumos\data\20260121_dp\20260121_all\episode" --output "F:\projects\lumos\data\20260121_dp\20260121_all_rot\episode"
     """
