@@ -9,12 +9,13 @@ from tqdm import tqdm
 
 
 class VideoBasedEfficientDataset(Dataset):
-    def __init__(self, dataset_path_list, stats, camera_names=['cam_high'], chunk_size=100):
+    def __init__(self, dataset_path_list, stats, camera_names=['cam_high'], chunk_size=100, target_size=(640, 480)):
         super().__init__()
         self.stats = stats
         self.camera_names = camera_names
         self.chunk_size = chunk_size
         self.dataset_path_list = dataset_path_list
+        self.target_size = target_size
 
         self.episodes = []
         self.indices = []
@@ -78,6 +79,7 @@ class VideoBasedEfficientDataset(Dataset):
                 break
             # OpenCV 默认读取为 BGR，需要转为 RGB 以匹配训练预期
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
             frames.append(frame)
         cap.release()
         return np.array(frames, dtype=np.uint8)

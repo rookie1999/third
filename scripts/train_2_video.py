@@ -24,11 +24,13 @@ from dataset.efficient_video_dataset import VideoBasedEfficientDataset
 def main():
     parser = argparse.ArgumentParser(description="ACT Training Script")
     parser.add_argument('--video', action='store_true', help='Use video dataset (load from .mp4)')
+    parser.add_argument('--fisheye', action='store_true', help='Whether use fisheye camera or not')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from (e.g., policy_epoch_500.ckpt)')
     parser.add_argument('--start_epoch', type=int, default=0, help='Epoch to start from (used when resuming)')
     args = parser.parse_args()
 
+    target_size = (480, 480)
 
     if args.video:
         # 视频模式下，建议指向 episode 文件夹，代码会自动找同级的 video 文件夹
@@ -81,13 +83,18 @@ def main():
         with open(STATS_PATH, 'rb') as f:
             stats = pickle.load(f)
 
+    TARGET_SIZE = (640, 480)
+    if args.fisheye:
+        TARGET_SIZE = (480, 480)
+
     if args.video:
         logger.info("Initializing VideoBasedEfficientDataset (Reading MP4s)...")
         train_dataset = VideoBasedEfficientDataset(
             dataset_path_list,
             stats,
             camera_names=CAMERA_NAMES,
-            chunk_size=CHUNK_SIZE
+            chunk_size=CHUNK_SIZE,
+            target_size=TARGET_SIZE
         )
     else:
         logger.info("Initializing EfficientEpisodicDataset (Reading HDF5 images)...")
@@ -151,7 +158,8 @@ def main():
             "Num Workers": num_workers,
             "Camera Names": CAMERA_NAMES
         },
-        "Model Architecture (args_override)": args_override
+        "Model Architecture (args_override)": args_override,
+        "Target Size": TARGET_SIZE,
     }
 
     logger.info("-" * 60)

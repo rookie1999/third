@@ -34,6 +34,7 @@ def is_main_process():
 def main():
     parser = argparse.ArgumentParser(description="ACT DDP Training Script")
     parser.add_argument('--video', action='store_true', help='Use video dataset (load from .mp4)')
+    parser.add_argument('--fisheye', action='store_true', help='Use video dataset (load from .mp4)')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--start_epoch', type=int, default=0, help='Epoch to start from')
     args = parser.parse_args()
@@ -47,6 +48,9 @@ def main():
 
     global_rank = dist.get_rank()
     world_size = dist.get_world_size()
+    TARGET_SIZE = (640, 480)
+    if args.fisheye:
+        TARGET_SIZE = (480, 480)
 
     # 路径配置
     if args.video:
@@ -121,7 +125,7 @@ def main():
             dataset_path_list, stats,
             camera_names=CAMERA_NAMES,
             chunk_size=CHUNK_SIZE,
-            n_obs_steps=N_OBS_STEPS
+            n_obs_steps=N_OBS_STEPS,
         )
     else:
         if is_main_process(): logger.info(f"Initializing HDF5 MA-Dataset...")

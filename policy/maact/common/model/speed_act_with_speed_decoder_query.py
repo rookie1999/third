@@ -13,7 +13,29 @@ from policy.maact.common.configs.configuration_act import SpeedACTConfig
 from policy.maact.common.model.base_act import ACTSinusoidalPositionEmbedding2d, ACTEncoder, \
     create_sinusoidal_pos_embedding, ACTDecoder
 
-# 日志配置：设置为 WARNING 级别，减少不必要的输出
+"""
+由于单纯加入一个token长度的speed_token没啥用，我们使用了
+方法一：本文件，在decoder上加入speed_token
+方法二：使用speed_token对图像进行调制
+    # __init__ 中
+    self.speed_film_gen = nn.Linear(config.dim_model, config.dim_model * 2) # 生成 gamma, beta
+    
+    # forward 中 (处理图像 token 时)
+    if aggregated_visual_tokens is not None:
+        speed_embed = self.speed_embedding(speed_idx) # (B, D)
+        film_params = self.speed_film_gen(speed_embed) # (B, 2*D)
+        gamma, beta = torch.split(film_params, config.dim_model, dim=1)
+        
+        # 广播到 (B, Num_Img_Tokens, D)
+        gamma = gamma.unsqueeze(1)
+        beta = beta.unsqueeze(1)
+        
+        # 调制视觉特征
+        aggregated_visual_tokens = aggregated_visual_tokens * (1 + gamma) + beta
+        
+        single_logical_timestep_tokens_list.append(aggregated_visual_tokens)
+"""
+
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -276,11 +298,22 @@ class SpeedACT(nn.Module):
 
         encoder_out = self.encoder(encoder_in_tokens)
 
+        # decoder_in = torch.zeros(
+        #     (self.config.chunk_size, batch_size, self.config.dim_model),
+        #     dtype=dtype,
+        #     device=device,
+        # )
+        speed_embed = self.speed_embedding(speed_idx)
+
+        speed_embed_expanded = speed_embed.unsqueeze(0).repeat(self.config.chunk_size, 1, 1)
+
+        # 将 speed 信息作为 decoder 的“底色”
         decoder_in = torch.zeros(
             (self.config.chunk_size, batch_size, self.config.dim_model),
             dtype=dtype,
             device=device,
-        )
+        ) + speed_embed_expanded
+
         decoder_out = self.decoder(
             decoder_in,
             encoder_out,

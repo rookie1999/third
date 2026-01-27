@@ -7,18 +7,18 @@ import time
 import cv2
 import torch
 
-from policy.maact.common.model.speed_act_with_speed import SpeedACT
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
 sys.path.append('/home/lumos/act_move/replay_remote_ctrl')
 
+from policy.maact.common.model.speed_act_with_speed import SpeedACT
 from scripts.predict import setup_robot
 from utils.camera import RealSenseCamera
 
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
+import threading
 
 # ==========================================
 # 配置区域
@@ -27,12 +27,12 @@ from policy.maact.common.configs.configuration_act import SpeedACTConfig
 CURRENT_ROBOT = 'startouch'
 CONFIG_FILE = 'config.yaml'
 
-CKPT_PATH = '/home/lumos/act_move/checkpoints/maact/policy_epoch_699.ckpt'
-STATS_PATH = '/home/lumos/act_move/checkpoints/maact/dataset_stats.pkl'
+CKPT_PATH = '/home/lumos/act_move/checkpoints/speed_act/policy_epoch_2199.ckpt'
+STATS_PATH = '/home/lumos/act_move/checkpoints/speed_act/dataset_stats.pkl'
 
 # 推理参数
 CHUNK_SIZE = 50  # 动作块大小 (与训练保持一致)
-EXECUTION_HORIZON = 20  # 开环执行步数 (小于 Chunk Size)
+EXECUTION_HORIZON = 13  # 开环执行步数 (小于 Chunk Size)
 FREQUENCY = 30  # 控制频率 Hz
 DT = 1.0 / FREQUENCY
 
@@ -41,15 +41,16 @@ MAIN_CAMERA_NAME = 'cam_high'  # 必须与训练时的名称一致
 CAMERA_NAMES = ['cam_high']
 NUM_SPEED_CATEGORIES = 3
 
+
 def load_checkpoint_compatible(model, checkpoint_path, device):
     """
     自动处理 DDP 训练出来的 'module.' 前缀，使其能加载到单卡模型中
     """
     print(f"🔄 Loading checkpoint from: {checkpoint_path}")
-    
+
     # 1. 加载文件
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    
+
     # 2. 兼容性处理：有时候 checkpoint 是字典，权重在 'state_dict' 键里
     if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
         state_dict = checkpoint['state_dict']
@@ -61,13 +62,13 @@ def load_checkpoint_compatible(model, checkpoint_path, device):
     for k, v in state_dict.items():
         # 如果 key 以 'module.' 开头，去掉前 7 个字符
         if k.startswith('module.'):
-            name = k[7:] 
+            name = k[7:]
         else:
             name = k
         new_state_dict[name] = v
-        
+
     # 4. 加载处理后的权重
-    msg = model.load_state_dict(new_state_dict, strict=False) # 建议先开 False 测试，没问题再 True
+    msg = model.load_state_dict(new_state_dict, strict=False)  # 建议先开 False 测试，没问题再 True
     print(f"✅ Loaded successfully! Missing keys: {msg.missing_keys}")
     return model
 
@@ -111,6 +112,7 @@ def get_user_speed_input(num_categories):
         except ValueError:
             print("❌ 输入格式错误，请输入数字")
 
+
 def main():
     parser = argparse.ArgumentParser(description="ACT Training Script")
     parser.add_argument('--joint_i', action='store_true', help='joint input')
@@ -120,17 +122,19 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # 形状: (1, 1, 3, 1, 1) 用于广播匹配 (Batch, Time, Channel, Height, Width)
-    NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 1, 3, 1, 1)
-    NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 1, 3, 1, 1)
+    NORM_MEAN = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+    NORM_STD = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
 
     print(f"Loading stats from {STATS_PATH}...")
     with open(STATS_PATH, 'rb') as f:
         stats = pickle.load(f)
     STATE_DIM = stats["qpos_mean"].shape[0]
     ACTION_DIM = stats["action_mean"].shape[0]
+
     def pre_process(qpos):
         qpos = qpos[:STATE_DIM]
         return (qpos - stats['qpos_mean']) / stats['qpos_std']
+
     def post_process(action):
         return action * stats['action_std'] + stats['action_mean']
 
@@ -174,15 +178,31 @@ def main():
     print("Press 'q' in the OpenCV window to quit.")
 
     try:
+        print("🤖 Robot going home...")
+        robot.go_home(blocking=True)
         while True:
             current_speed = get_user_speed_input(NUM_SPEED_CATEGORIES)
 
             speed_tensor = torch.tensor([current_speed], dtype=torch.long, device=device)
 
-            print("🤖 Robot going home...")
-            robot.go_home(blocking=True, duration=3.0)
-
             print(f"🟢 Start Inference Loop (Speed: {current_speed})... Press [Enter] to Reset.")
+
+            reset_event = threading.Event()
+
+            # 2. 定义后台监听函数：只做一件事，等回车，然后设标志
+            def wait_for_enter():
+                try:
+                    # input() 本质是阻塞的，但因为它在子线程里，所以不会卡住机器人
+                    input()
+                    reset_event.set()
+                except:
+                    pass
+
+            # 3. 启动子线程
+            # daemon=True 表示如果不小心退出了主程序，这个线程也会自动随之关闭，不会卡后台
+            input_thread = threading.Thread(target=wait_for_enter, daemon=True)
+            input_thread.start()
+
             reset_triggered = False
             while not reset_triggered:
                 img = camera.get_frame()
@@ -197,14 +217,15 @@ def main():
                 img_tensor = torch.from_numpy(img).float().to(device)
                 img_tensor = img_tensor.permute(2, 0, 1)
                 # 增加 Batch 和 Time 维度
-                img_tensor = img_tensor.unsqueeze(0).unsqueeze(0)
+                img_tensor = img_tensor.unsqueeze(0)
+                # print(img_tensor.shape)
                 img_tensor = img_tensor / 255.0
                 img_tensor = (img_tensor - NORM_MEAN) / NORM_STD
 
                 # --- 状态处理: (D,) -> (1, 1, D) ---
                 qpos_norm = pre_process(qpos)
                 qpos_tensor = torch.from_numpy(qpos_norm).float().to(device)
-                qpos_tensor = qpos_tensor.unsqueeze(0).unsqueeze(0)
+                qpos_tensor = qpos_tensor.unsqueeze(0)
 
                 # 2. 模型推理
                 with torch.inference_mode():
@@ -223,13 +244,10 @@ def main():
                 for t in range(EXECUTION_HORIZON):
                     t_exec_start = time.time()
 
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
-                        print("Quitting...")
-                        raise KeyboardInterrupt
-                    elif key == 13:  # Enter 键 (ASCII 13)
+                    if reset_event.is_set():
                         print("\n🔄 Reset triggered! Restarting session...")
                         reset_triggered = True
+                        robot.go_home(blocking=True)
                         break
 
                     target_action = all_actions[t]
@@ -241,9 +259,9 @@ def main():
                     if curr_img is not None:
                         bgr_img = cv2.cvtColor(curr_img, cv2.COLOR_RGB2BGR)
                         # 在左上角显示当前速度模式
-                        cv2.putText(bgr_img, f"Speed Mode: {current_speed}", (10, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                        cv2.imshow("Camera View", bgr_img)
+                        # cv2.putText(bgr_img, f"Speed Mode: {current_speed}", (10, 30),
+                        # cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                        # cv2.imshow("Camera View", bgr_img)
 
                     # --- 频率控制 ---
                     elapsed = time.time() - t_exec_start

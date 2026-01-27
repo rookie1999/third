@@ -35,6 +35,7 @@ def is_main_process():
 def main():
     parser = argparse.ArgumentParser(description="ACT DDP Training Script")
     parser.add_argument('--video', action='store_true', help='Use video dataset (load from .mp4)')
+    parser.add_argument('--fisheye', action='store_true', help='Whether use fisheye camera or not')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--start_epoch', type=int, default=0, help='Epoch to start from')
     args = parser.parse_args()
@@ -107,6 +108,10 @@ def main():
         with open(STATS_PATH, 'wb') as f:
             pickle.dump(stats, f)
 
+    TARGET_SIZE = (640, 480)
+    if args.fisheye:
+        TARGET_SIZE = (480, 480)
+
     # 广播 stats 对象
     stats_list = [stats]
     dist.broadcast_object_list(stats_list, src=0)
@@ -118,7 +123,8 @@ def main():
     if args.video:
         if is_main_process(): logger.info("Initializing VideoBasedEfficientDataset...")
         train_dataset = VideoBasedEfficientDataset(
-            dataset_path_list, stats, camera_names=CAMERA_NAMES, chunk_size=CHUNK_SIZE
+            dataset_path_list, stats, camera_names=CAMERA_NAMES, chunk_size=CHUNK_SIZE,
+            target_size=TARGET_SIZE
         )
     else:
         if is_main_process(): logger.info("Initializing EfficientEpisodicDataset...")
@@ -195,7 +201,7 @@ def main():
     policy = torch.nn.SyncBatchNorm.convert_sync_batchnorm(policy)
 
     # find_unused_parameters=False 通常能提升速度，除非模型有些层在前向传播中未被使用
-    policy = DDP(policy, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+    policy = DDP(policy, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
     # 获取 optimizer (注意：DDP 包装后，configure_optimizers 可能会失效，因为那是原模型的方法)
     # policy 现在是 DDP 对象，policy.module 才是原来的 ACTPolicy
