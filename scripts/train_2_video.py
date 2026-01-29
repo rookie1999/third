@@ -52,7 +52,7 @@ def main():
     # 超参数
     NUM_EPOCHS = 1000
     BATCH_SIZE = 64
-    LR = 1e-5
+    LR = 1e-4
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
     CAMERA_NAMES = ['cam_high']

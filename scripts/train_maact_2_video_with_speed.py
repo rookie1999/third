@@ -16,7 +16,7 @@ sys.path.append(project_root)
 
 from dataset.efficient_dataset import EfficientEpisodicDataset
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
-from policy.maact.common.model.speed_act_with_speed import SpeedACT
+from policy.maact.common.model.speed_act_with_speed_decoder_query_film import SpeedACT
 from dataset.utils_norm import get_norm_stats
 from scripts.utils_train import setup_logger, get_run_dirs, save_train_loss_plot, kl_divergence
 

@@ -82,7 +82,7 @@ def main():
     # 超参数配置
     NUM_EPOCHS = 2000
     BATCH_SIZE = 128
-    LR = 1e-5
+    LR = 1e-4
     LR_BACKBONE = 1e-5
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0

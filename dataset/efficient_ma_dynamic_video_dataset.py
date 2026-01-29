@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 class VideoBasedEfficientMADataset(Dataset):
     def __init__(self, dataset_path_list, stats, camera_names=['cam_high'], chunk_size=100,
-                 n_obs_steps=1, max_preload_episodes=200):
+                 n_obs_steps=1, max_preload_episodes=400):
         """
         Args:
             max_preload_episodes (int): 核心参数。指定有多少集数据会"常驻内存"。
