@@ -166,7 +166,6 @@ class SpeedACT(nn.Module):
                 self.L_effective += self.num_visual_tokens * num_cameras
             if self.config.env_state_feature:
                 self.L_effective += 1
-            self.L_effective += 1
 
             self.encoder_pos_embed = nn.Embedding(self.L_effective, config.dim_model)
             self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
@@ -175,7 +174,11 @@ class SpeedACT(nn.Module):
             self._reset_parameters()
 
         self.speed_film_gen = nn.Linear(config.dim_model, config.dim_model * 2)
+        # film参数的零初始化，这能防止训练初期和后期的数值爆炸，保证初始状态下图像特征不被扭曲
+        nn.init.constant_(self.speed_film_gen.weight, 0)
+        nn.init.constant_(self.speed_film_gen.bias, 0)
         self.null_speed_embed = nn.Parameter(torch.randn(1, config.dim_model) * 0.02)
+        self.speed_drop_prob = 0.25
 
     def _reset_parameters(self):
         for p in chain(self.encoder.parameters(), self.decoder.parameters()):
@@ -251,6 +254,12 @@ class SpeedACT(nn.Module):
         else:
             latent_sample = torch.zeros([batch_size, self.config.latent_dim], dtype=dtype).to(device)
 
+        speed_idx = batch["speed_label"]
+        current_speed_embed = self.speed_embedding(speed_idx)  # (B, D)
+        if self.training and self.speed_drop_prob > 0:
+            mask = torch.rand(batch_size, 1, device=device) < self.speed_drop_prob
+            current_speed_embed = torch.where(mask, self.null_speed_embed, current_speed_embed)
+
         aggregated_visual_tokens = None
         if self.config.image_features:
             current_cam_images = []
@@ -267,6 +276,13 @@ class SpeedACT(nn.Module):
                                einops.rearrange(cam_pos_embed, "n d h w -> n (h w) d")
             aggregated_visual_tokens = processed_tokens.reshape(batch_size, -1, self.config.dim_model)
 
+            film_params = self.speed_film_gen(current_speed_embed)  # (B, 2*D)
+            gamma, beta = torch.split(film_params, self.config.dim_model, dim=1)
+            # 广播到 (B, Num_Img_Tokens, D)
+            gamma = gamma.unsqueeze(1)
+            beta = beta.unsqueeze(1)
+            aggregated_visual_tokens = aggregated_visual_tokens * (1 + gamma) + beta
+
         single_logical_timestep_tokens_list = []
 
         latent_token = self.encoder_latent_input_proj(latent_sample).unsqueeze(1)
@@ -276,28 +292,7 @@ class SpeedACT(nn.Module):
             robot_state_token = self.encoder_robot_state_input_proj(batch["observation.state"]).unsqueeze(1)
             single_logical_timestep_tokens_list.append(robot_state_token)
 
-        speed_idx = batch["speed_label"]  # (B,)
-        speed_token = self.speed_embedding(speed_idx).unsqueeze(1)  # (B, 1, dim_model)
-
-        if self.training:
-            mask_prob = 0.1
-            mask = torch.rand(speed_token.shape[0], device=speed_token.device) < mask_prob
-            speed_token[mask] = self.null_speed_embed
-
-        single_logical_timestep_tokens_list.append(speed_token)
-
         if aggregated_visual_tokens is not None:
-            speed_embed = self.speed_embedding(speed_idx)  # (B, D)
-            film_params = self.speed_film_gen(speed_embed)  # (B, 2*D)
-            gamma, beta = torch.split(film_params, self.config.dim_model, dim=1)
-
-            # 广播到 (B, Num_Img_Tokens, D)
-            gamma = gamma.unsqueeze(1)
-            beta = beta.unsqueeze(1)
-
-            # 调制视觉特征
-            aggregated_visual_tokens = aggregated_visual_tokens * (1 + gamma) + beta
-
             single_logical_timestep_tokens_list.append(aggregated_visual_tokens)
 
         if self.config.env_state_feature:
@@ -318,21 +313,11 @@ class SpeedACT(nn.Module):
 
         encoder_out = self.encoder(encoder_in_tokens)
 
-        # decoder_in = torch.zeros(
-        #     (self.config.chunk_size, batch_size, self.config.dim_model),
-        #     dtype=dtype,
-        #     device=device,
-        # )
-        speed_embed = self.speed_embedding(speed_idx)
-
-        speed_embed_expanded = speed_embed.unsqueeze(0).repeat(self.config.chunk_size, 1, 1)
-
-        # 将 speed 信息作为 decoder 的“底色”
         decoder_in = torch.zeros(
             (self.config.chunk_size, batch_size, self.config.dim_model),
             dtype=dtype,
             device=device,
-        ) + speed_embed_expanded
+        )
 
         decoder_out = self.decoder(
             decoder_in,

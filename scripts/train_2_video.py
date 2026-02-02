@@ -56,12 +56,7 @@ def main():
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
     CAMERA_NAMES = ['cam_high']
-    STATE_DIM = 7
-    ACTION_DIM = 7
-    if STATE_DIM == 7:
-        logger.info("Use rpy for training")
-    elif STATE_DIM == 10:
-        logger.info("Use rot6d for training")
+
 
     # 硬件配置
     # num_workers = 8 if args.video else 4  # 视频解码需要更多 CPU 线程
@@ -82,6 +77,13 @@ def main():
         logger.info(f"Loading stats from: {STATS_PATH}")
         with open(STATS_PATH, 'rb') as f:
             stats = pickle.load(f)
+
+    STATE_DIM = stats['qpos_mean'].shape[0]
+    ACTION_DIM = stats['action_mean'].shape[0]
+    if STATE_DIM == 7:
+        logger.info("Use rpy for training")
+    elif STATE_DIM == 10:
+        logger.info("Use rot6d for training")
 
     TARGET_SIZE = (640, 480)
     if args.fisheye:

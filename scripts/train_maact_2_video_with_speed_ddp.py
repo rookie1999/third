@@ -20,7 +20,7 @@ sys.path.append(project_root)
 
 from dataset.efficient_dataset import EfficientEpisodicDataset
 from policy.maact.common.configs.configuration_act import SpeedACTConfig
-from policy.maact.common.model.speed_act_with_speed import SpeedACT
+from policy.maact.common.model.speed_act_with_speed_decoder_query_film import SpeedACT
 from dataset.utils_norm import get_norm_stats
 from scripts.utils_train import setup_logger, get_run_dirs, save_train_loss_plot, kl_divergence
 from dataset.efficient_ma_dynamic_video_dataset import VideoBasedEfficientMADataset
@@ -54,7 +54,7 @@ def main():
 
     # 路径配置
     if args.video:
-        DATA_DIR = r'/root/Users/zhanguozhi/lumos/data/20260121_all_rot/episode'
+        DATA_DIR = r'/root/Users/zhanguozhi/lumos/data/fastumi_01_rot/episode'
     else:
         DATA_DIR = r'F:\projects\lumos\data\20260109'  # 注意：Linux下路径格式不同，确保多卡环境是Linux
 
@@ -81,7 +81,7 @@ def main():
 
     # 超参数配置
     NUM_EPOCHS = 2000
-    BATCH_SIZE = 128
+    BATCH_SIZE = 64
     LR = 1e-4
     LR_BACKBONE = 1e-5
     CHUNK_SIZE = 50
@@ -126,6 +126,7 @@ def main():
             camera_names=CAMERA_NAMES,
             chunk_size=CHUNK_SIZE,
             n_obs_steps=N_OBS_STEPS,
+            target_size=TARGET_SIZE
         )
     else:
         if is_main_process(): logger.info(f"Initializing HDF5 MA-Dataset...")

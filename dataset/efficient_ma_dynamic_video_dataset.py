@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 class VideoBasedEfficientMADataset(Dataset):
     def __init__(self, dataset_path_list, stats, camera_names=['cam_high'], chunk_size=100,
-                 n_obs_steps=1, max_preload_episodes=400):
+                 n_obs_steps=1, max_preload_episodes=400, target_size=(640, 480)):
         """
         Args:
             max_preload_episodes (int): 核心参数。指定有多少集数据会"常驻内存"。
@@ -24,6 +24,7 @@ class VideoBasedEfficientMADataset(Dataset):
         self.chunk_size = chunk_size
         self.n_obs_steps = n_obs_steps
         self.dataset_path_list = dataset_path_list
+        self.target_size = target_size
 
         # 记录缓存策略
         self.max_preload_episodes = max_preload_episodes
@@ -111,6 +112,7 @@ class VideoBasedEfficientMADataset(Dataset):
             ret, frame = cap.read()
             if not ret: break
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
             frames.append(frame)
         cap.release()
         return np.array(frames, dtype=np.uint8)

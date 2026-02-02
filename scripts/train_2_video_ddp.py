@@ -84,8 +84,6 @@ def main():
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
     CAMERA_NAMES = ['cam_high']
-    STATE_DIM = 7
-    ACTION_DIM = 7
 
     num_workers = 6
 
@@ -119,6 +117,14 @@ def main():
 
     # 等待同步
     dist.barrier()
+
+    STATE_DIM = stats['qpos_mean'].shape[0]
+    ACTION_DIM = stats['action_mean'].shape[0]
+    if STATE_DIM == 7:
+        logger.info("Use rpy for training")
+    elif STATE_DIM == 10:
+        logger.info("Use rot6d for training")
+
 
     if args.video:
         if is_main_process(): logger.info("Initializing VideoBasedEfficientDataset...")
