@@ -281,7 +281,11 @@ class SpeedACT(nn.Module):
                 current_cam_images.append(batch["observation.images"][cam_id])
             stacked_images = torch.stack(current_cam_images, dim=1)
             # obs_steps=2 的话，这里的 shape 会包含时间维度，需 flatten 到 batch 或 channel
-            flat_images = einops.rearrange(stacked_images, 'b c img_c h w -> (b c) img_c h w')
+            # flat_images = einops.rearrange(stacked_images, 'b c img_c h w -> (b c) img_c h w')
+            if stacked_images.dim() == 6:
+                flat_images = einops.rearrange(stacked_images, 'b c t img_c h w -> (b c t) img_c h w')
+            else:
+                flat_images = einops.rearrange(stacked_images, 'b c img_c h w -> (b c) img_c h w')
 
             cam_feat = self.backbone(flat_images)["feature_map"]
             cam_feat_proj = self.encoder_img_feat_input_proj(cam_feat)
@@ -317,9 +321,13 @@ class SpeedACT(nn.Module):
 
         if self.config.robot_state_feature is not None:
             robot_state_token = self.encoder_robot_state_input_proj(batch["observation.state"]).unsqueeze(1)
+            if robot_state_token.dim() == 2:
+                robot_state_token = robot_state_token.unsqueeze(1)  # (B, 1, D)
             single_logical_timestep_tokens_list.append(robot_state_token)
 
-        single_logical_timestep_tokens_list.append(target_speed_token.unsqueeze(1))
+        if target_speed_token.dim() == 2:
+            target_speed_token = target_speed_token.unsqueeze(1)  # (B, 1, D)
+        single_logical_timestep_tokens_list.append(target_speed_token)
 
         if aggregated_visual_tokens is not None:
             single_logical_timestep_tokens_list.append(aggregated_visual_tokens)
