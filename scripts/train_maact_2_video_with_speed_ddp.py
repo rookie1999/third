@@ -54,7 +54,7 @@ def main():
 
     # 路径配置
     if args.video:
-        DATA_DIR = r'/root/Users/zhanguozhi/lumos/data/fastumi_01_rot/episode'
+        DATA_DIR = r'/root/Users/zhanguozhi/lumos/data/012_rot/episode'
     else:
         DATA_DIR = r'F:\projects\lumos\data\20260109'  # 注意：Linux下路径格式不同，确保多卡环境是Linux
 
@@ -86,10 +86,12 @@ def main():
     LR_BACKBONE = 1e-5
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
+    CLS_WEIGHT = 0.2
 
     CAMERA_NAMES = ['cam_high']
     MAIN_CAMERA_NAME = 'cam_high'
     N_OBS_STEPS = 1
+    NUM_SPEED_CATEGORIES = 3
 
     num_workers = 7
 
@@ -159,12 +161,12 @@ def main():
         n_decoder_layers=1,
         chunk_size=CHUNK_SIZE,
         n_obs_steps=N_OBS_STEPS,
-        image_features={cam: (3, 480, 640) for cam in CAMERA_NAMES},
+        image_features={cam: (3, TARGET_SIZE[1], TARGET_SIZE[0]) for cam in CAMERA_NAMES},
         main_camera=MAIN_CAMERA_NAME,
         robot_state_feature=(STATE_DIM,),
         action_feature=(ACTION_DIM,),
         use_optical_flow=False,
-        num_speed_categories=3,
+        num_speed_categories=NUM_SPEED_CATEGORIES,
         feedforward_activation="relu",
         pre_norm=False,
         global_flow_size=128,
@@ -242,7 +244,7 @@ def main():
                 "observation.images": norm_imgs, "speed_label": speed_labels
             }
 
-            pred_actions, (mu, logvar) = policy(batch_input)
+            pred_actions, (mu, logvar), pred_speed_logits = policy(batch_input)
 
             all_l1 = F.l1_loss(pred_actions, action, reduction='none')
 
@@ -256,6 +258,10 @@ def main():
             kl_loss = total_kld[0]
 
             loss = l1 + KL_WEIGHT * kl_loss
+
+            if pred_speed_logits is not None:
+                loss_cls = F.cross_entropy(pred_speed_logits, speed_labels)
+                loss += CLS_WEIGHT * loss_cls
 
             optimizer.zero_grad()
             loss.backward()

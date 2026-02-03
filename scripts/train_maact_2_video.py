@@ -125,6 +125,7 @@ def main():
         global_flow_size=128,
         optical_flow_map_height=256,
         optical_flow_map_width=320,
+        num_speed_categories=3,
     )
     policy = SpeedACT(config).to(device)
 

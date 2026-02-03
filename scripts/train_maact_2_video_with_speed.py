@@ -53,6 +53,7 @@ def main():
     LR_BACKBONE = 1e-5
     CHUNK_SIZE = 50
     KL_WEIGHT = 10.0
+    CLS_WEIGHT = 0.2
 
     CAMERA_NAMES = ['cam_high']
     MAIN_CAMERA_NAME = 'cam_high'
@@ -179,7 +180,7 @@ def main():
                 "observation.images": norm_imgs, "speed_label": speed_labels
             }
 
-            pred_actions, (mu, logvar) = policy(batch_input)
+            pred_actions, (mu, logvar), pred_speed_logits = policy(batch_input)
 
             all_l1 = F.l1_loss(pred_actions, action, reduction='none')
 
@@ -194,6 +195,10 @@ def main():
             kl_loss = total_kld[0]
 
             loss = l1 + KL_WEIGHT * kl_loss
+
+            if pred_speed_logits is not None:
+                loss_cls = F.cross_entropy(pred_speed_logits, speed_labels)
+                loss += CLS_WEIGHT * loss_cls
 
             optimizer.zero_grad()
             loss.backward()
