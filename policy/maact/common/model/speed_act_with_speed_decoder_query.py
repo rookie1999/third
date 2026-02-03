@@ -157,6 +157,19 @@ class SpeedACT(nn.Module):
             self.encoder_latent_input_proj = nn.Linear(config.latent_dim, config.dim_model)
 
             self.speed_embedding = nn.Embedding(self.config.num_speed_categories, config.dim_model)
+            # 预测两帧的速度
+            self.speed_estimator = nn.Sequential(
+                nn.Linear(config.dim_model, config.dim_model),
+                nn.ReLU(),
+                nn.Linear(config.dim_model, config.dim_model)
+            )
+            self.speed_cls_head = nn.Linear(config.dim_model, self.config.num_speed_categories)
+            # mlp进行速度与其他维度的对齐
+            self.speed_encoder_proj = nn.Sequential(
+                nn.Linear(config.dim_model, config.dim_model),
+                nn.ReLU(),
+                nn.Linear(config.dim_model, config.dim_model)
+            )
 
             self.L_effective = 1
             if self.config.robot_state_feature is not None:
@@ -166,7 +179,7 @@ class SpeedACT(nn.Module):
                 self.L_effective += self.num_visual_tokens * num_cameras
             if self.config.env_state_feature:
                 self.L_effective += 1
-            self.L_effective += 1
+            self.L_effective += 1  # speed token
 
             self.encoder_pos_embed = nn.Embedding(self.L_effective, config.dim_model)
             self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
@@ -178,12 +191,9 @@ class SpeedACT(nn.Module):
         for p in chain(self.encoder.parameters(), self.decoder.parameters()):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
-        if hasattr(self, 'speed_prediction_head'):
-            for p in self.speed_prediction_head.parameters():
-                if p.dim() > 1:
-                    nn.init.xavier_uniform_(p)
-        if hasattr(self, 'speed_token_proj'):
-            nn.init.xavier_uniform_(self.speed_token_proj.weight)
+        if hasattr(self, 'speed_cls_head'):
+            nn.init.xavier_uniform_(self.speed_cls_head.weight)
+            nn.init.constant_(self.speed_cls_head.bias, 0)
 
     def forward(self, batch: dict[str, Tensor], return_features: bool = False) -> tuple[
         Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
@@ -248,21 +258,57 @@ class SpeedACT(nn.Module):
         else:
             latent_sample = torch.zeros([batch_size, self.config.latent_dim], dtype=dtype).to(device)
 
+        # aggregated_visual_tokens = None
+        # if self.config.image_features:
+        #     current_cam_images = []
+        #     for cam_id, cam_name in enumerate(self.config.image_features.keys()):
+        #         current_cam_images.append(batch["observation.images"][cam_id])
+        #     stacked_images = torch.stack(current_cam_images, dim=1)
+        #     flat_images = einops.rearrange(stacked_images, 'b c img_c h w -> (b c) img_c h w')
+        #     cam_feat = self.backbone(flat_images)["feature_map"]
+        #     cam_feat_proj = self.encoder_img_feat_input_proj(cam_feat)
+        #     cam_feat_proj_downsampled = self.visual_feature_downsampler(cam_feat_proj)
+        #     cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_feat_proj_downsampled).to(
+        #         dtype=cam_feat_proj_downsampled.dtype)
+        #     processed_tokens = einops.rearrange(cam_feat_proj_downsampled, "n d h w -> n (h w) d") + \
+        #                        einops.rearrange(cam_pos_embed, "n d h w -> n (h w) d")
+        #     aggregated_visual_tokens = processed_tokens.reshape(batch_size, -1, self.config.dim_model)
+
         aggregated_visual_tokens = None
         if self.config.image_features:
             current_cam_images = []
             for cam_id, cam_name in enumerate(self.config.image_features.keys()):
                 current_cam_images.append(batch["observation.images"][cam_id])
             stacked_images = torch.stack(current_cam_images, dim=1)
+            # obs_steps=2 的话，这里的 shape 会包含时间维度，需 flatten 到 batch 或 channel
             flat_images = einops.rearrange(stacked_images, 'b c img_c h w -> (b c) img_c h w')
+
             cam_feat = self.backbone(flat_images)["feature_map"]
             cam_feat_proj = self.encoder_img_feat_input_proj(cam_feat)
             cam_feat_proj_downsampled = self.visual_feature_downsampler(cam_feat_proj)
+
             cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_feat_proj_downsampled).to(
                 dtype=cam_feat_proj_downsampled.dtype)
+
             processed_tokens = einops.rearrange(cam_feat_proj_downsampled, "n d h w -> n (h w) d") + \
                                einops.rearrange(cam_pos_embed, "n d h w -> n (h w) d")
             aggregated_visual_tokens = processed_tokens.reshape(batch_size, -1, self.config.dim_model)
+
+        if aggregated_visual_tokens is not None:
+            global_visual_feat = aggregated_visual_tokens.mean(dim=1)  # (B, D)
+        else:
+            global_visual_feat = torch.zeros(batch_size, self.config.dim_model, device=device, dtype=dtype)
+
+        pred_speed_embed = self.speed_estimator(global_visual_feat)  # (B, D)
+        pred_speed_logits = self.speed_cls_head(pred_speed_embed)  # (B, Num_Classes) -> 返回给外部算 Loss
+
+        if self.training and "speed_label" in batch:
+            speed_idx = batch["speed_label"]
+            target_speed_token = self.speed_embedding(speed_idx)  # (B, D)
+        else:
+            target_speed_token = pred_speed_embed
+
+        target_speed_token = self.speed_encoder_proj(target_speed_token)
 
         single_logical_timestep_tokens_list = []
 
@@ -273,9 +319,7 @@ class SpeedACT(nn.Module):
             robot_state_token = self.encoder_robot_state_input_proj(batch["observation.state"]).unsqueeze(1)
             single_logical_timestep_tokens_list.append(robot_state_token)
 
-        speed_idx = batch["speed_label"]  # (B,)
-        speed_token = self.speed_embedding(speed_idx).unsqueeze(1)  # (B, 1, dim_model)
-        single_logical_timestep_tokens_list.append(speed_token)
+        single_logical_timestep_tokens_list.append(target_speed_token.unsqueeze(1))
 
         if aggregated_visual_tokens is not None:
             single_logical_timestep_tokens_list.append(aggregated_visual_tokens)
@@ -298,21 +342,13 @@ class SpeedACT(nn.Module):
 
         encoder_out = self.encoder(encoder_in_tokens)
 
-        # decoder_in = torch.zeros(
-        #     (self.config.chunk_size, batch_size, self.config.dim_model),
-        #     dtype=dtype,
-        #     device=device,
-        # )
-        speed_embed = self.speed_embedding(speed_idx)
-
-        speed_embed_expanded = speed_embed.unsqueeze(0).repeat(self.config.chunk_size, 1, 1)
-
-        # 将 speed 信息作为 decoder 的“底色”
         decoder_in = torch.zeros(
             (self.config.chunk_size, batch_size, self.config.dim_model),
             dtype=dtype,
             device=device,
-        ) + speed_embed_expanded
+        )
+        # self.query_embed = nn.Embedding(config.chunk_size, config.dim_model)
+        # decoder_in = self.query_embed.weight.unsqueeze(1).repeat(1, batch_size, 1)
 
         decoder_out = self.decoder(
             decoder_in,
@@ -325,4 +361,4 @@ class SpeedACT(nn.Module):
         if return_features:
             return actions, (mu, log_sigma_x2), encoder_out
 
-        return actions, (mu, log_sigma_x2)
+        return actions, (mu, log_sigma_x2), pred_speed_logits
